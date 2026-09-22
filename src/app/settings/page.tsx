@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { connection } from "next/server";
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { HealthBadge } from "@/components/status";
 import { Panel, PageHeader } from "@/components/ui";
 import { getDataSource } from "@/lib/data";
@@ -18,8 +18,29 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function EnvStatus({ set }: { set: boolean }) {
-  return set ? <HealthBadge health="healthy" label="Set" /> : <HealthBadge health="unknown" label="Not set" />;
+function EnvStatus({ found, options }: { found: string | null; options: readonly string[] }) {
+  if (found) {
+    return (
+      <span className="flex items-center gap-2">
+        <HealthBadge health="healthy" label="Set" />
+        <code className="text-xs text-slate-600">{found}</code>
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-center gap-2">
+      <HealthBadge health="unknown" label="Not set" />
+      <span className="text-xs text-slate-500">
+        Looked for{" "}
+        {options.map((o, i) => (
+          <Fragment key={o}>
+            {i > 0 && " or "}
+            <code>{o}</code>
+          </Fragment>
+        ))}
+      </span>
+    </span>
+  );
 }
 
 export default async function SettingsPage() {
@@ -40,16 +61,17 @@ export default async function SettingsPage() {
               <HealthBadge health="warning" label="Built-in sample data" />
             )}
           </Row>
-          <Row label="SUPABASE_URL">
-            <EnvStatus set={env.url} />
+          <Row label="Supabase project URL">
+            <EnvStatus found={env.url} options={env.urlOptions} />
           </Row>
-          <Row label="SUPABASE_SECRET_KEY">
-            <EnvStatus set={env.secretKey} />
+          <Row label="Supabase secret key">
+            <EnvStatus found={env.secretKey} options={env.secretKeyOptions} />
           </Row>
         </dl>
         {source === "sample" && (
           <p className="border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
-            Set both variables in <code>.env.local</code> and restart the server to use Supabase. See the README.
+            Set both in <code>.env.local</code> (or connect the Supabase integration on Vercel) and restart the server
+            to use Supabase. See the README.
           </p>
         )}
       </Panel>

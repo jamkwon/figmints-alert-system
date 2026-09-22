@@ -40,7 +40,22 @@ Copy `.env.example` to `.env.local`:
 | `SUPABASE_SECRET_KEY` | For real data | Supabase secret key (`sb_secret_...`) or legacy `service_role` key. **Server-only.** |
 | `APP_TIMEZONE` | No | Timezone for displayed times. Default `America/New_York`. |
 
-Both Supabase variables must be set for the app to use Supabase. Settings shows which data source is active.
+Both Supabase variables must be set for the app to use Supabase. Settings shows which data source is active and which variable names it found.
+
+### Deploying on Vercel with the Supabase integration
+
+The app also accepts the names Vercel's Supabase Marketplace integration creates:
+
+| Setting | Accepted names (first match wins) |
+| --- | --- |
+| Project URL | `SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_URL` |
+| Secret key | `SUPABASE_SECRET_KEY`, `SUPABASE_SERVICE_ROLE_KEY` |
+
+1. In Vercel, go to **Project → Storage** (or **Integrations → Supabase**) and create a new Supabase database or connect an existing one to this project. Leave the environment variable prefix empty.
+2. Run the migration and optional seed in that Supabase project's SQL Editor (see **Database setup** below).
+3. Redeploy. The app's **Settings** page should show *Supabase* as the data source.
+
+The integration also adds public anon/publishable keys (`NEXT_PUBLIC_SUPABASE_ANON_KEY` and similar). The app doesn't use them, and RLS blocks them from reading any data.
 
 > Never prefix these with `NEXT_PUBLIC_`. The secret key bypasses row-level security and must never reach the browser. The Supabase client lives in `src/lib/supabase/server.ts`, which imports `server-only`, so the build fails if that file is ever imported into client code.
 
