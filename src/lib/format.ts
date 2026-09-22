@@ -1,0 +1,60 @@
+// Dates render on the server, so use a fixed business timezone rather than the server's.
+export const APP_TIMEZONE = process.env.APP_TIMEZONE || "America/New_York";
+
+const dayKey = new Intl.DateTimeFormat("en-CA", {
+  timeZone: APP_TIMEZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+const timeOnly = new Intl.DateTimeFormat("en-US", {
+  timeZone: APP_TIMEZONE,
+  hour: "numeric",
+  minute: "2-digit",
+});
+const dateTime = new Intl.DateTimeFormat("en-US", {
+  timeZone: APP_TIMEZONE,
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+const full = new Intl.DateTimeFormat("en-US", {
+  timeZone: APP_TIMEZONE,
+  dateStyle: "medium",
+  timeStyle: "long",
+});
+
+/** "11:43 AM" for today, otherwise "Sep 19, 11:43 AM". */
+export function formatDateTime(iso: string, now: Date = new Date()): string {
+  const date = new Date(iso);
+  if (dayKey.format(date) === dayKey.format(now)) return timeOnly.format(date);
+  return dateTime.format(date);
+}
+
+export function formatFull(iso: string): string {
+  return full.format(new Date(iso));
+}
+
+export function timeAgo(iso: string, now: Date = new Date()): string {
+  const minutes = Math.round((now.getTime() - new Date(iso).getTime()) / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hr ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+export function formatDuration(fromIso: string, toIso: string): string {
+  const minutes = Math.max(0, Math.round((new Date(toIso).getTime() - new Date(fromIso).getTime()) / 60_000));
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hr ${minutes % 60} min`;
+  return `${Math.floor(hours / 24)} d ${hours % 24} hr`;
+}
+
+/** Hostname + path without protocol, for compact display. */
+export function displayUrl(url: string): string {
+  return url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+}

@@ -1,0 +1,215 @@
+import "server-only";
+import { cache } from "react";
+import { connection } from "next/server";
+import {
+  compareHealth,
+  isActiveIncident,
+  monitorHealth,
+  needsAttention,
+  rollUpHealth,
+  type Health,
+} from "@/lib/health";
+import { buildSampleSnapshot } from "@/lib/sample-data";
+import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
+import type {
+  Client,
+  Incident,
+  Monitor,
+  MonitorCheckSummary,
+  Severity,
+  Snapshot,
+  Website,
+} from "@/lib/types";
+
+// Phase 1 loads the whole (small) dataset per request and derives views in code.
+// Fine for tens of clients; revisit with targeted queries if it grows.
+const INCIDENT_LIMIT = 500;
+
+export type DataSource = "supabase" | "sample";
+
+export function getDataSource(): DataSource {
+  return isSupabaseConfigured() ? "supabase" : "sample";
+}
+
+const loadSnapshot = cache(async (): Promise<Snapshot> => {
+  await connection();
+  if (!isSupabaseConfigured()) return buildSampleSnapshot();
+
+  const db = getSupabase();
+  const [clients, websites, monitors, summaries, incidents] = await Promise.all([
+    db.from("clients").select("*").order("name"),
+    db.from("websites").select("*").order("name"),
+    db.from("monitors").select("*").order("name"),
+    db.from("monitor_check_summary").select("*"),
+    db
+      .from("incidents")
+      .select("*")
+      .order("first_detected_at", { ascending: false })
+      .limit(INCIDENT_LIMIT),
+  ]);
+
+  for (const [table, result] of Object.entries({ clients, websites, monitors, summaries, incidents })) {
+    if (result.error) throw new Error(`Failed to load ${table}: ${result.error.message}`);
+  }
+
+  return {
+    clients: clients.data as Client[],
+    websites: websites.data as Website[],
+    monitors: monitors.data as Monitor[],
+    summaries: summaries.data as MonitorCheckSummary[],
+    incidents: incidents.data as Incident[],
+  };
+});
+
+// View models ------------------------------------------------------------------
+
+export interface MonitorView {
+  monitor: Monitor;
+  website: Website;
+  client: Client;
+  summary: MonitorCheckSummary | undefined;
+  health: Health;
+  activeIncident: Incident | undefined;
+}
+
+export interface WebsiteView {
+  website: Website;
+  health: Health;
+}
+
+export interface IncidentView {
+  incident: Incident;
+  client: Client;
+  website: Website | undefined;
+  monitor: Monitor | undefined;
+}
+
+export interface ClientView {
+  client: Client;
+  health: Health;
+  websites: WebsiteView[];
+  monitors: MonitorView[];
+  incidents: IncidentView[];
+  activeIncidents: IncidentView[];
+  lastCheckedAt: string | null;
+}
+
+export interface AppData {
+  source: DataSource;
+  loadedAt: string;
+  clients: ClientView[];
+  monitors: MonitorView[];
+  incidents: IncidentView[];
+}
+
+const SEVERITY_ORDER: Record<Severity, number> = { critical: 0, warning: 1, informational: 2 };
+
+function latest(dates: (string | null)[]): string | null {
+  return dates.reduce<string | null>((max, d) => (d && (!max || d > max) ? d : max), null);
+}
+
+function groupBy<T>(items: T[], key: (item: T) => string | null): Map<string, T[]> {
+  const map = new Map<string, T[]>();
+  for (const item of items) {
+    const k = key(item);
+    if (k === null) continue;
+    map.set(k, [...(map.get(k) ?? []), item]);
+  }
+  return map;
+}
+
+/** Active incidents first (by severity), then most recent. */
+export function compareIncidents(a: IncidentView, b: IncidentView): number {
+  const activeDiff = Number(isActiveIncident(b.incident)) - Number(isActiveIncident(a.incident));
+  if (activeDiff !== 0) return activeDiff;
+  const attentionDiff = Number(needsAttention(b.incident)) - Number(needsAttention(a.incident));
+  if (attentionDiff !== 0) return attentionDiff;
+  const severityDiff = SEVERITY_ORDER[a.incident.severity] - SEVERITY_ORDER[b.incident.severity];
+  if (severityDiff !== 0) return severityDiff;
+  return b.incident.first_detected_at.localeCompare(a.incident.first_detected_at);
+}
+
+function buildAppData(s: Snapshot): Omit<AppData, "source" | "loadedAt"> {
+  const clientById = new Map(s.clients.map((c) => [c.id, c]));
+  const websiteById = new Map(s.websites.map((w) => [w.id, w]));
+  const monitorById = new Map(s.monitors.map((m) => [m.id, m]));
+  const summaryByMonitor = new Map(s.summaries.map((x) => [x.monitor_id, x]));
+  const incidentsByMonitor = groupBy(s.incidents, (i) => i.monitor_id);
+
+  const monitors: MonitorView[] = [];
+  for (const monitor of s.monitors) {
+    const website = websiteById.get(monitor.website_id);
+    const client = website && clientById.get(website.client_id);
+    if (!website || !client) continue;
+    const monitorIncidents = incidentsByMonitor.get(monitor.id) ?? [];
+    monitors.push({
+      monitor,
+      website,
+      client,
+      summary: summaryByMonitor.get(monitor.id),
+      health: monitorHealth(
+        monitor,
+        summaryByMonitor.get(monitor.id),
+        monitorIncidents,
+        website.active && client.active,
+      ),
+      activeIncident: monitorIncidents.find(isActiveIncident),
+    });
+  }
+
+  const incidents: IncidentView[] = s.incidents
+    .filter((incident) => clientById.has(incident.client_id))
+    .map((incident) => ({
+      incident,
+      client: clientById.get(incident.client_id)!,
+      website: incident.website_id ? websiteById.get(incident.website_id) : undefined,
+      monitor: incident.monitor_id ? monitorById.get(incident.monitor_id) : undefined,
+    }))
+    .sort(compareIncidents);
+
+  const monitorsByWebsite = groupBy(monitors, (m) => m.website.id);
+  const monitorsByClient = groupBy(monitors, (m) => m.client.id);
+  const incidentsByClient = groupBy(incidents, (i) => i.client.id);
+  const incidentsByWebsite = groupBy(incidents, (i) => i.incident.website_id);
+
+  const clients: ClientView[] = s.clients
+    .map((client) => {
+      const clientMonitors = monitorsByClient.get(client.id) ?? [];
+      const clientIncidents = incidentsByClient.get(client.id) ?? [];
+      const websites = s.websites
+        .filter((w) => w.client_id === client.id)
+        .map((website) => ({
+          website,
+          health: rollUpHealth(
+            website.active && client.active,
+            (monitorsByWebsite.get(website.id) ?? []).map((m) => m.health),
+            (incidentsByWebsite.get(website.id) ?? []).map((i) => i.incident),
+          ),
+        }));
+      return {
+        client,
+        health: rollUpHealth(
+          client.active,
+          clientMonitors.map((m) => m.health),
+          clientIncidents.map((i) => i.incident),
+        ),
+        websites,
+        monitors: clientMonitors,
+        incidents: clientIncidents,
+        activeIncidents: clientIncidents.filter((i) => isActiveIncident(i.incident)),
+        lastCheckedAt: latest(clientMonitors.map((m) => m.monitor.last_checked_at)),
+      };
+    })
+    .sort((a, b) => compareHealth(a.health, b.health) || a.client.name.localeCompare(b.client.name));
+
+  return { clients, monitors, incidents };
+}
+
+export const getAppData = cache(async (): Promise<AppData> => {
+  const snapshot = await loadSnapshot();
+  return {
+    source: getDataSource(),
+    loadedAt: new Date().toISOString(),
+    ...buildAppData(snapshot),
+  };
+});
