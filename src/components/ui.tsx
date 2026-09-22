@@ -64,8 +64,8 @@ export function When({ iso, empty = "Never" }: { iso: string | null | undefined;
 export const table = {
   wrapper: "overflow-x-auto",
   table: "w-full text-left text-sm",
-  head: "border-b border-slate-200 bg-fig-cream/50 text-xs font-medium uppercase tracking-wide text-slate-500",
+  head: "border-b border-slate-200 bg-white text-xs font-medium uppercase tracking-wide text-fig-plum/80",
   th: "px-4 py-2.5 font-medium",
-  row: "border-b border-slate-100 last:border-0 align-top hover:bg-fig-cream-light",
+  row: "border-b border-slate-100 last:border-0 align-top hover:bg-fig-plum-mist",
   td: "px-4 py-3",
 };

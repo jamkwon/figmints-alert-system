@@ -17,6 +17,8 @@
   --color-fig-cream-light: #fffaee;
   --color-fig-ink: #202023;
   --color-fig-ink-light: #403f45;
+  /* Light tint of #820152 for table row hover */
+  --color-fig-plum-mist: #faf3f7;
 
   /*
    * Tailwind scales re-tuned to the brand so utility classes stay on-palette:
