@@ -2,6 +2,7 @@
 // reserved .example domain. Mirrors supabase/seed.sql; keep the two in sync.
 import type {
   AssignedTeam,
+  CheckResult,
   CheckStatus,
   Client,
   Environment,
@@ -20,7 +21,24 @@ const wid = (n: number) => `22222222-2222-4222-8222-${String(n).padStart(12, "0"
 const mid = (n: number) => `33333333-3333-4333-8333-${String(n).padStart(12, "0")}`;
 const iid = (n: number) => `44444444-4444-4444-8444-${String(n).padStart(12, "0")}`;
 
-export function buildSampleSnapshot(now: Date = new Date()): Snapshot {
+/** Latest check and last success for one monitor, like the monitor_check_summary view. */
+export function summarizeChecks(monitorId: string, checks: CheckResult[]): MonitorCheckSummary {
+  const own = checks
+    .filter((c) => c.monitor_id === monitorId)
+    .sort((a, b) => b.checked_at.localeCompare(a.checked_at));
+  const latest = own[0];
+  return {
+    monitor_id: monitorId,
+    last_status: latest?.status ?? null,
+    last_result_at: latest?.checked_at ?? null,
+    last_http_status: latest?.http_status ?? null,
+    last_response_time_ms: latest?.response_time_ms ?? null,
+    last_error_message: latest?.error_message ?? null,
+    last_success_at: own.find((c) => c.passed)?.checked_at ?? null,
+  };
+}
+
+export function buildSampleData(now: Date = new Date()): { snapshot: Snapshot; checkResults: CheckResult[] } {
   const ago = (minutes: number) => new Date(now.getTime() - minutes * 60_000).toISOString();
   const created = ago(60 * 24 * 90);
 
@@ -71,8 +89,17 @@ export function buildSampleSnapshot(now: Date = new Date()): Snapshot {
   ];
 
   const monitors: Monitor[] = [];
-  const summaries: MonitorCheckSummary[] = [];
+  const checkResults: CheckResult[] = [];
 
+  interface SampleFailure {
+    min: number;
+    status: Exclude<CheckStatus, "passed">;
+    http: number;
+    ms: number;
+    error: string;
+  }
+
+  // Mirrors seed.sql: 12 passing checks ending `passingLatestMin` ago, then any failures.
   function monitor(
     n: number,
     websiteN: number,
@@ -85,13 +112,40 @@ export function buildSampleSnapshot(now: Date = new Date()): Snapshot {
       interval: number;
       severity: Severity;
       active?: boolean;
-      lastMin: number;
-      lastSuccessMin: number;
-      last: { status: CheckStatus; http: number; ms: number; error?: string };
+      passingLatestMin: number;
+      failures?: SampleFailure[];
     },
   ) {
+    const id = mid(n);
+    for (let g = 0; g < 12; g++) {
+      checkResults.push({
+        id: `${id}-p${g}`,
+        monitor_id: id,
+        status: "passed",
+        checked_at: ago(opts.passingLatestMin + g * opts.interval),
+        http_status: 200,
+        response_time_ms: type === "response_time" ? 1100 + ((g * 53) % 300) : 280 + ((g * 37) % 400),
+        passed: true,
+        error_message: null,
+        metadata: {},
+      });
+    }
+    for (const [i, f] of (opts.failures ?? []).entries()) {
+      checkResults.push({
+        id: `${id}-f${i}`,
+        monitor_id: id,
+        status: f.status,
+        checked_at: ago(f.min),
+        http_status: f.http,
+        response_time_ms: f.ms,
+        passed: false,
+        error_message: f.error,
+        metadata: {},
+      });
+    }
+    const lastMin = Math.min(opts.passingLatestMin, ...(opts.failures ?? []).map((f) => f.min));
     monitors.push({
-      id: mid(n),
+      id,
       website_id: wid(websiteN),
       name,
       monitor_type: type,
@@ -102,54 +156,56 @@ export function buildSampleSnapshot(now: Date = new Date()): Snapshot {
       interval_minutes: opts.interval,
       severity_on_failure: opts.severity,
       active: opts.active ?? true,
-      last_checked_at: ago(opts.lastMin),
-      next_check_at: ago(opts.lastMin - opts.interval),
+      last_checked_at: ago(lastMin),
+      next_check_at: ago(lastMin - opts.interval),
       created_at: created,
       updated_at: created,
     });
-    summaries.push({
-      monitor_id: mid(n),
-      last_status: opts.last.status,
-      last_result_at: ago(opts.lastMin),
-      last_http_status: opts.last.http,
-      last_response_time_ms: opts.last.ms,
-      last_error_message: opts.last.error ?? null,
-      last_success_at: ago(opts.lastSuccessMin),
-    });
   }
 
-  const ok = (ms: number) => ({ status: "passed" as const, http: 200, ms });
+  const fails = (
+    status: SampleFailure["status"],
+    http: number,
+    error: string,
+    points: [min: number, ms: number][],
+  ): SampleFailure[] => points.map(([min, ms]) => ({ min, status, http, ms, error }));
 
   monitor(1, 1, "Homepage", "http_status", "https://harborviewdental.example/",
-    { interval: 5, severity: "critical", lastMin: 1, lastSuccessMin: 1, last: ok(280) });
+    { interval: 5, severity: "critical", passingLatestMin: 1 });
   monitor(2, 1, "Contact Page", "expected_content", "https://harborviewdental.example/contact",
-    { expectedText: "Request an Appointment", interval: 5, severity: "critical", lastMin: 3, lastSuccessMin: 18,
-      last: { status: "failed", http: 500, ms: 640, error: "HTTP 500 Internal Server Error" } });
+    { expectedText: "Request an Appointment", interval: 5, severity: "critical", passingLatestMin: 18,
+      failures: fails("failed", 500, "HTTP 500 Internal Server Error", [[13, 612], [8, 587], [3, 640]]) });
   monitor(3, 1, "Services Page", "http_status", "https://harborviewdental.example/services",
-    { interval: 15, severity: "warning", lastMin: 6, lastSuccessMin: 6, last: ok(280) });
+    { interval: 15, severity: "warning", passingLatestMin: 6 });
   monitor(4, 2, "Homepage Response Time", "response_time", "https://northgatetitle.example/",
-    { maxMs: 2000, interval: 15, severity: "warning", lastMin: 4, lastSuccessMin: 64,
-      last: { status: "warning", http: 200, ms: 4400, error: "Response time 4400 ms exceeds 2000 ms threshold" } });
+    { maxMs: 2000, interval: 15, severity: "warning", passingLatestMin: 64,
+      failures: [[49, 3600], [34, 4100], [19, 3900], [4, 4400]].map(([min, ms]) => ({
+        min, status: "warning" as const, http: 200, ms, error: `Response time ${ms} ms exceeds 2000 ms threshold`,
+      })) });
   monitor(5, 2, "Contact Page", "http_status", "https://northgatetitle.example/contact",
-    { interval: 15, severity: "critical", lastMin: 9, lastSuccessMin: 9, last: ok(280) });
+    { interval: 15, severity: "critical", passingLatestMin: 9 });
   monitor(6, 3, "Homepage", "http_status", "https://bluefinchbakery.example/",
-    { interval: 5, severity: "critical", lastMin: 2, lastSuccessMin: 2, last: ok(280) });
+    { interval: 5, severity: "critical", passingLatestMin: 2 });
   monitor(7, 3, "Shop Page", "expected_content", "https://bluefinchbakery.example/shop",
-    { expectedText: "Add to cart", interval: 15, severity: "critical", lastMin: 11, lastSuccessMin: 11, last: ok(280) });
+    { expectedText: "Add to cart", interval: 15, severity: "critical", passingLatestMin: 11 });
   monitor(8, 4, "Homepage", "http_status", "https://summitridgeacademy.example/",
-    { interval: 15, severity: "critical", lastMin: 5, lastSuccessMin: 5, last: ok(280) });
+    { interval: 15, severity: "critical", passingLatestMin: 5 });
   monitor(9, 4, "Admissions Page", "expected_content", "https://summitridgeacademy.example/admissions",
-    { expectedText: "Schedule a Visit", interval: 60, severity: "critical", lastMin: 23, lastSuccessMin: 23, last: ok(280) });
+    { expectedText: "Schedule a Visit", interval: 60, severity: "critical", passingLatestMin: 23 });
   monitor(10, 5, "Staging Homepage", "http_status", "https://staging.summitridgeacademy.example/",
-    { interval: 60, severity: "informational", lastMin: 14, lastSuccessMin: 2880,
-      last: { status: "failed", http: 503, ms: 95, error: "HTTP 503 Service Unavailable" } });
+    { interval: 60, severity: "informational", passingLatestMin: 2880,
+      failures: fails("failed", 503, "HTTP 503 Service Unavailable", [[14, 95]]) });
   monitor(11, 6, "Homepage", "http_status", "https://coastalroofingpros.example/",
-    { interval: 5, severity: "critical", lastMin: 3, lastSuccessMin: 3, last: ok(280) });
+    { interval: 5, severity: "critical", passingLatestMin: 3 });
   monitor(12, 6, "Free Estimate Page", "expected_content", "https://coastalroofingpros.example/free-estimate",
-    { expectedText: "Get Your Free Estimate", interval: 15, severity: "warning", lastMin: 8, lastSuccessMin: 68,
-      last: { status: "failed", http: 200, ms: 801, error: 'Expected text "Get Your Free Estimate" not found' } });
+    { expectedText: "Get Your Free Estimate", interval: 15, severity: "warning", passingLatestMin: 68,
+      failures: fails("failed", 200, 'Expected text "Get Your Free Estimate" not found',
+        [[53, 820], [38, 790], [23, 845], [8, 801]]) });
   monitor(13, 7, "Homepage", "http_status", "https://mapleoaklaw.example/",
-    { interval: 60, severity: "critical", active: false, lastMin: 17280, lastSuccessMin: 17280, last: ok(280) });
+    { interval: 60, severity: "critical", active: false, passingLatestMin: 17280 });
+
+  checkResults.sort((a, b) => b.checked_at.localeCompare(a.checked_at));
+  const summaries = monitors.map((m) => summarizeChecks(m.id, checkResults));
 
   function incident(
     n: number,
@@ -210,5 +266,5 @@ export function buildSampleSnapshot(now: Date = new Date()): Snapshot {
       "Page slug changed during a content update. Redirect added."),
   ];
 
-  return { clients, websites, monitors, summaries, incidents };
+  return { snapshot: { clients, websites, monitors, summaries, incidents }, checkResults };
 }

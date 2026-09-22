@@ -83,7 +83,10 @@ export default async function SettingsPage() {
           <Row label="Default HTTP success">Status 200–399 (unless a monitor sets an expected status)</Row>
           <Row label="Display timezone">{APP_TIMEZONE}</Row>
           <Row label="Automated checks">
-            <span className="text-slate-500">Not running yet. Checks and scheduling arrive in Phases 2 to 4.</span>
+            <span className="text-slate-500">
+              Manual only for now: use <strong>Run check</strong> on a monitor. Scheduled checks arrive in Phase 4, and
+              automatic incidents in Phase 3.
+            </span>
           </Row>
         </dl>
       </Panel>

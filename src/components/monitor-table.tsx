@@ -1,7 +1,8 @@
 import Link from "next/link";
+import { RunCheckButton } from "@/components/run-check-button";
 import { HealthBadge } from "@/components/status";
 import { EmptyState, When, table } from "@/components/ui";
-import type { MonitorView } from "@/lib/data";
+import { getDataSource, type MonitorView } from "@/lib/data";
 import { displayUrl } from "@/lib/format";
 import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS, formatInterval } from "@/lib/labels";
 
@@ -25,6 +26,7 @@ export function MonitorTable({
   showClient?: boolean;
 }) {
   if (monitors.length === 0) return <EmptyState>No monitors configured.</EmptyState>;
+  const sampleMode = getDataSource() === "sample";
 
   return (
     <div className={table.wrapper}>
@@ -38,6 +40,9 @@ export function MonitorTable({
             <th className={table.th}>Last result</th>
             <th className={table.th}>Last checked</th>
             <th className={table.th}>Last successful</th>
+            <th className={table.th}>
+              <span className="sr-only">Actions</span>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -49,7 +54,9 @@ export function MonitorTable({
                   <HealthBadge health={view.health} />
                 </td>
                 <td className={table.td}>
-                  <div className="font-medium text-fig-ink">{monitor.name}</div>
+                  <Link href={`/monitors/${monitor.id}`} className="block font-medium text-fig-ink hover:text-fig-plum hover:underline">
+                    {monitor.name}
+                  </Link>
                   <a
                     href={monitor.target_url}
                     target="_blank"
@@ -87,6 +94,19 @@ export function MonitorTable({
                 </td>
                 <td className={table.td}>
                   <When iso={view.summary?.last_success_at} />
+                </td>
+                <td className={`${table.td} text-right`}>
+                  <RunCheckButton
+                    monitorId={monitor.id}
+                    compact
+                    disabledReason={
+                      sampleMode
+                        ? "Connect Supabase to run real checks"
+                        : view.health === "inactive"
+                          ? "This monitor is paused"
+                          : undefined
+                    }
+                  />
                 </td>
               </tr>
             );
