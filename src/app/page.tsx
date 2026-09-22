@@ -39,11 +39,14 @@ function StatCard({
 function AttentionRows({ severity, incidents }: { severity: Severity; incidents: IncidentView[] }) {
   if (incidents.length === 0) return null;
   const heading = severity === "critical" ? "Critical" : "Warning";
+  // Same colors as the severity badges
+  const groupStyle =
+    severity === "critical" ? "bg-fig-coral-wash text-red-800" : "bg-amber-100 text-amber-800";
   return (
     <>
       <tr>
-        <td colSpan={6} className="bg-slate-50 px-4 py-2">
-          <span className="flex items-center gap-2 text-xs font-semibold tracking-wide text-fig-ink uppercase">
+        <td colSpan={6} className={`px-4 py-2 ${groupStyle}`}>
+          <span className="flex items-center gap-2 text-xs font-semibold tracking-wide uppercase">
             <HealthDot health={severity} />
             {heading} ({incidents.length})
           </span>
