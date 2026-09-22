@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+@theme {
+  /* Figmints brand palette (from "Figmints_color palette") */
+  --color-fig-plum-dark: #48021c;
+  --color-fig-plum: #820152;
+  --color-fig-magenta: #a1017b;
+  --color-fig-pink: #df4abe;
+  --color-fig-pink-light: #f9bff3;
+  --color-fig-teal-dark: #044043;
+  --color-fig-teal: #0d5d5d;
+  --color-fig-teal-light: #359f9d;
+  --color-fig-teal-wash: #e3f2f1;
+  --color-fig-coral: #ff5c66;
+  --color-fig-coral-wash: #fde2e4;
+  --color-fig-cream: #fdf0d6;
+  --color-fig-cream-light: #fffaee;
+  --color-fig-ink: #202023;
+  --color-fig-ink-light: #403f45;
+
+  /*
+   * Tailwind scales re-tuned to the brand so utility classes stay on-palette:
+   * slate = warm neutrals between ink and cream, red = coral, teal = brand teal,
+   * amber = gold that pairs with the brand creams (the palette has no yellow).
+   * Values marked * are exact brand colors.
+   */
+  --color-slate-50: #fbf8f1;
+  --color-slate-100: #f3eee4;
+  --color-slate-200: #e6e0d4;
+  --color-slate-300: #cfc8bc;
+  --color-slate-400: #a29da3;
+  --color-slate-500: #77737b;
+  --color-slate-600: #5a5760;
+  --color-slate-700: #403f45; /* * */
+  --color-slate-800: #2e2d33;
+  --color-slate-900: #202023; /* * */
+  --color-slate-950: #161618;
+
+  --color-red-50: #fff1f2;
+  --color-red-100: #fde2e4; /* * */
+  --color-red-200: #fbc4c8;
+  --color-red-300: #ff9aa0;
+  --color-red-400: #ff7880;
+  --color-red-500: #ff5c66; /* * */
+  --color-red-600: #e43e4a;
+  --color-red-700: #b8283a;
+  --color-red-800: #8f1d2e;
+  --color-red-900: #6b1424;
+
+  --color-teal-50: #eef8f7;
+  --color-teal-100: #e3f2f1;
+  --color-teal-200: #bfe2e0;
+  --color-teal-300: #8ccbc9;
+  --color-teal-400: #5db5b3;
+  --color-teal-500: #359f9d; /* * */
+  --color-teal-600: #1f7c7b;
+  --color-teal-700: #0d5d5d; /* * */
+  --color-teal-800: #084d4f;
+  --color-teal-900: #044043; /* * */
+
+  --color-amber-50: #fffaee; /* * */
+  --color-amber-100: #fdf0d6; /* * */
+  --color-amber-200: #f8dda8;
+  --color-amber-300: #f3c877;
+  --color-amber-400: #edb04a;
+  --color-amber-500: #d9952a;
+  --color-amber-600: #b4761c;
+  --color-amber-700: #8c5a16;
+  --color-amber-800: #6b4414;
+  --color-amber-900: #4f3210;
+
+  --font-sans: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-montreal), var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  background: var(--color-fig-cream-light);
+  color: var(--color-fig-ink);
+}
