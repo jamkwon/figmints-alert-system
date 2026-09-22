@@ -1,6 +1,6 @@
 // Pure health rules. Only type imports here so `node --test` can run the tests
 // without a bundler.
-import type { Incident, IncidentStatus, Monitor, MonitorCheckSummary } from "@/lib/types";
+import type { CheckResult, Incident, IncidentStatus, Monitor, MonitorCheckSummary } from "@/lib/types";
 
 export type Health = "critical" | "warning" | "informational" | "unknown" | "healthy" | "inactive";
 
@@ -89,4 +89,18 @@ export function rollUpHealth(active: boolean, monitorHealths: Health[], incident
     .map(incidentHealth)
     .filter((h): h is Health => h !== null);
   return worstHealth([...monitorHealths, ...fromIncidents]);
+}
+
+/**
+ * Start of the current failure streak: the oldest non-passing check since the
+ * last pass. Null when the latest check passed. `history` must be newest first.
+ * If the whole history is failing, returns its oldest check (the streak may be longer).
+ */
+export function failingSince(history: Pick<CheckResult, "checked_at" | "passed">[]): string | null {
+  let since: string | null = null;
+  for (const check of history) {
+    if (check.passed) break;
+    since = check.checked_at;
+  }
+  return since;
 }

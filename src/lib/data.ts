@@ -9,9 +9,10 @@ import {
   rollUpHealth,
   type Health,
 } from "@/lib/health";
-import { buildSampleSnapshot } from "@/lib/sample-data";
+import { buildSampleData } from "@/lib/sample-data";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
 import type {
+  CheckResult,
   Client,
   Incident,
   Monitor,
@@ -31,9 +32,12 @@ export function getDataSource(): DataSource {
   return isSupabaseConfigured() ? "supabase" : "sample";
 }
 
+// One sample dataset per request so the snapshot and check history line up.
+const loadSampleData = cache(() => buildSampleData());
+
 const loadSnapshot = cache(async (): Promise<Snapshot> => {
   await connection();
-  if (!isSupabaseConfigured()) return buildSampleSnapshot();
+  if (!isSupabaseConfigured()) return loadSampleData().snapshot;
 
   const db = getSupabase();
   const [clients, websites, monitors, summaries, incidents] = await Promise.all([
@@ -213,3 +217,21 @@ export const getAppData = cache(async (): Promise<AppData> => {
     ...buildAppData(snapshot),
   };
 });
+
+/** Most recent checks for one monitor, newest first. */
+export async function getCheckHistory(monitorId: string, limit = 50): Promise<CheckResult[]> {
+  await connection();
+  if (!isSupabaseConfigured()) {
+    return loadSampleData()
+      .checkResults.filter((c) => c.monitor_id === monitorId)
+      .slice(0, limit);
+  }
+  const { data, error } = await getSupabase()
+    .from("check_results")
+    .select("*")
+    .eq("monitor_id", monitorId)
+    .order("checked_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`Failed to load check history: ${error.message}`);
+  return data as CheckResult[];
+}

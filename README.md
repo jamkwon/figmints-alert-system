@@ -6,9 +6,10 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 
 ## Status
 
-**Phase 1 (foundation): done.** Includes the app shell, database schema, sample data, and the Dashboard, Clients, Client detail, Incidents, Checks, and Settings screens.
+- **Phase 1 (foundation): done.** App shell, database schema, sample data, and the Dashboard, Clients, Client detail, Incidents, Checks, and Settings screens.
+- **Phase 2 (basic HTTP monitoring): done.** Real HTTP checks (status code, response time, expected content), stored check history, a Monitor detail page, and a manual **Run check** button.
 
-Phase 1 does **not** check any websites yet. Every status you see comes from seeded or sample data. Real HTTP checks arrive in Phase 2, the incident engine in Phase 3, and scheduling in Phase 4.
+Checks run **only when someone clicks Run check**. Automatic incidents arrive in Phase 3, and scheduled checks in Phase 4. Running checks requires Supabase; on sample data the button is disabled.
 
 ## Stack
 
@@ -104,17 +105,23 @@ Row-level security is enabled on every table with **no policies**. The public an
 | `npm start` | Serve the production build |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | Generate route types and run `tsc` |
-| `npm test` | Unit tests for health rules (Node's built-in test runner) |
+| `npm test` | Unit tests for health rules, check evaluation and SSRF protection (Node's built-in test runner) |
 
 ## Project layout
 
 ```
 src/
-  app/                  Routes: dashboard, clients, clients/[id], incidents, checks, settings
-  components/           Sidebar, status badges, shared tables, UI primitives
+  app/                  Routes: dashboard, clients, clients/[id], monitors/[id], incidents, checks, settings
+    actions.ts          Server action: Run check
+  components/           Sidebar, status badges, shared tables, Run check button, UI primitives
   lib/
     data.ts             Loads data (Supabase or sample) and builds view models
     health.ts           Health rules: monitor → website → client roll-up
+    monitoring/
+      run-check.ts      Performs one HTTP check (redirects, timeout, body limit, error messages)
+      evaluate.ts       Pure pass/fail rules for a check
+      url-safety.ts     SSRF protection
+      record.ts         Runs a check and saves the result
     sample-data.ts      Built-in sample data (mirrors supabase/seed.sql)
     supabase/server.ts  Server-only Supabase client
     types.ts            Row types matching the SQL schema
@@ -122,6 +129,42 @@ supabase/
   migrations/           SQL schema
   seed.sql              Sample data
 ```
+
+## How checks work
+
+Each check makes one `GET` request to the monitor's target URL and stores the result in `check_results`.
+
+| Monitor type | Passes when | Otherwise |
+| --- | --- | --- |
+| HTTP Status | Status is 200–399, or exactly the monitor's *expected status* if one is set | Failed |
+| Expected Content | Status passes **and** the expected text appears in the page's visible text | Failed |
+| Response Time | Status passes **and** the full response takes no longer than *max response time* (default 3000 ms) | Warning (slow) |
+
+Any monitor with *expected text* set also checks the text, whatever its type.
+
+- **Redirects** are followed (up to 5), each one re-validated. If a monitor's expected status is a 3xx, redirects aren't followed, so the redirect itself is what gets checked.
+- **Limits:** 15-second timeout, and at most 2 MB of the page is read.
+- **Text matching** ignores case, HTML tags, extra whitespace and common HTML entities (`&nbsp;`, `&amp;`, curly quotes). Text that appears only inside `<script>` or `<style>` doesn't count.
+- **Errors** (DNS, connection refused, SSL problems, timeouts) are stored as failed checks with a readable message.
+- **Response time** covers the whole request, including redirects and downloading the page.
+- Running a check updates the monitor's `last_checked_at` and `next_check_at`. Manual runs of the same monitor are limited to one every 10 seconds.
+
+### Adding a real client and monitor
+
+There's no "add monitor" screen yet. Until there is, add rows in the Supabase **SQL Editor**:
+
+```sql
+with c as (
+  insert into clients (name, primary_website) values ('Acme Co', 'https://acme.com') returning id
+), w as (
+  insert into websites (client_id, name, url)
+  select id, 'Main site', 'https://acme.com' from c returning id
+)
+insert into monitors (website_id, name, monitor_type, target_url, expected_text, interval_minutes, severity_on_failure)
+select id, 'Contact Page', 'expected_content', 'https://acme.com/contact', 'Contact Us', 15, 'critical' from w;
+```
+
+Then open **Checks**, click the monitor, and press **Run check**.
 
 ## How health is determined
 
@@ -133,4 +176,5 @@ supabase/
 
 - This is an internal tool, but **it has no login yet**. Before deploying anywhere reachable, put it behind Vercel Deployment Protection (or add authentication in a later phase).
 - All database access runs server-side.
-- Phase 2 must add SSRF protection before fetching any monitor URL. That means allowing only http/https and blocking private, loopback, and link-local addresses.
+- **SSRF protection** (`src/lib/monitoring/url-safety.ts`): only `http`/`https` on ports 80, 443, 8080 or 8443; no credentials in URLs; no internal hostnames (`localhost`, `*.local`, single-word names). Every DNS answer is checked **at connection time**, so private, loopback, link-local (including the `169.254.169.254` cloud metadata address), CGNAT, multicast and reserved IPv4/IPv6 addresses are refused, even after a redirect or a DNS change.
+- The Run check action accepts only a monitor ID and always fetches the URL stored in the database. It can't be used to request arbitrary addresses. Without a login, though, anyone who can reach the app can trigger checks of existing monitors, which is another reason to keep Deployment Protection on.

@@ -58,7 +58,11 @@ function AttentionRows({ severity, incidents }: { severity: Severity; incidents:
             <Link href={`/clients/${client.id}`} className="font-semibold text-fig-plum hover:underline">
               {client.name}
             </Link>
-            {monitor && <div className="text-xs text-slate-500">{monitor.name}</div>}
+            {monitor && (
+              <Link href={`/monitors/${monitor.id}`} className="block text-xs text-slate-500 hover:text-fig-plum hover:underline">
+                {monitor.name}
+              </Link>
+            )}
           </td>
           <td className={`${table.td} max-w-md`}>
             <div className="font-medium text-fig-ink">{incident.title}</div>

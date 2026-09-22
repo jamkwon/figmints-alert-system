@@ -37,7 +37,14 @@ export function IncidentTable({
               </td>
               <td className={`${table.td} max-w-md`}>
                 <div className="font-medium text-fig-ink">{incident.title}</div>
-                {monitor && <div className="text-xs text-slate-500">Monitor: {monitor.name}</div>}
+                {monitor && (
+                  <div className="text-xs text-slate-500">
+                    Monitor:{" "}
+                    <Link href={`/monitors/${monitor.id}`} className="hover:text-fig-plum hover:underline">
+                      {monitor.name}
+                    </Link>
+                  </div>
+                )}
                 {incident.description && (
                   <div className="mt-1 text-xs text-slate-600">{incident.description}</div>
                 )}

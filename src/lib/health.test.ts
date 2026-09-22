@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { monitorHealth, rollUpHealth, worstHealth } from "./health.ts";
+import { failingSince, monitorHealth, rollUpHealth, worstHealth } from "./health.ts";
 import type { Incident, Monitor, MonitorCheckSummary } from "./types.ts";
 
 const monitor: Monitor = {
@@ -100,4 +100,12 @@ test("roll-up includes incidents not tied to a monitor", () => {
   assert.equal(rollUpHealth(true, ["healthy"], [clientLevel]), "warning");
   assert.equal(rollUpHealth(true, ["healthy", "healthy"], []), "healthy");
   assert.equal(rollUpHealth(false, ["critical"], [clientLevel]), "inactive");
+});
+
+test("failing since finds the start of the current failure streak", () => {
+  const check = (checked_at: string, passed: boolean) => ({ checked_at, passed });
+  assert.equal(failingSince([]), null);
+  assert.equal(failingSince([check("t3", true), check("t2", false)]), null);
+  assert.equal(failingSince([check("t3", false), check("t2", false), check("t1", true)]), "t2");
+  assert.equal(failingSince([check("t2", false), check("t1", false)]), "t1");
 });

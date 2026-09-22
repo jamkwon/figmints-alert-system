@@ -1,6 +1,6 @@
 import type { Health } from "@/lib/health";
 import { INCIDENT_STATUS_LABELS, SEVERITY_LABELS, TEAM_LABELS } from "@/lib/labels";
-import type { AssignedTeam, IncidentStatus, Severity } from "@/lib/types";
+import type { AssignedTeam, CheckStatus, IncidentStatus, Severity } from "@/lib/types";
 
 // One place for status colors so every screen uses the same indicators:
 // red = critical, amber = warning, teal = healthy, gray = informational/inactive.
@@ -61,6 +61,18 @@ export function HealthBadge({ health, label }: { health: Health; label?: string 
 
 export function SeverityBadge({ severity }: { severity: Severity }) {
   return <HealthBadge health={severity} label={SEVERITY_LABELS[severity]} />;
+}
+
+const CHECK_STATUS_DISPLAY: Record<CheckStatus, { health: Health; label: string }> = {
+  passed: { health: "healthy", label: "Passed" },
+  warning: { health: "warning", label: "Slow" },
+  failed: { health: "critical", label: "Failed" },
+};
+
+/** Result of a single check run. */
+export function CheckStatusBadge({ status }: { status: CheckStatus }) {
+  const { health, label } = CHECK_STATUS_DISPLAY[status];
+  return <HealthBadge health={health} label={label} />;
 }
 
 const INCIDENT_STATUS_STYLES: Record<IncidentStatus, string> = {
