@@ -75,7 +75,24 @@
   --font-display: var(--font-montreal), var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
 }
 
+/* Brand surface for the sidebar and login page: brand plum with a soft dark fade toward the bottom */
+:root {
+  --fig-brand-gradient: linear-gradient(to bottom, rgba(255, 255, 255, 0) 0%, rgba(64, 64, 64, 0.6) 100%);
+}
+
+@utility bg-fig-brand {
+  background: var(--fig-brand-gradient), var(--color-fig-plum);
+}
+
 body {
   background: var(--color-fig-cream-light);
   color: var(--color-fig-ink);
+}
+
+/* Tailwind 4 gives buttons the default arrow cursor; use a pointer for anything clickable. */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
 }
