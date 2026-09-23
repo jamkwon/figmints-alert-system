@@ -36,7 +36,9 @@ export function IncidentTable({
                 <SeverityBadge severity={incident.severity} />
               </td>
               <td className={`${table.td} max-w-md`}>
-                <div className="font-medium text-fig-ink">{incident.title}</div>
+                <Link href={`/incidents/${incident.id}`} className="font-medium text-fig-ink hover:text-fig-plum hover:underline">
+                  {incident.title}
+                </Link>
                 {monitor && (
                   <div className="text-xs text-slate-500">
                     Monitor:{" "}

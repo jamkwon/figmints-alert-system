@@ -31,6 +31,15 @@ export function isActiveIncident(incident: Incident): boolean {
   return ACTIVE_STATUSES.includes(incident.status);
 }
 
+/**
+ * Not yet resolved, in any status including ignored. The incident engine tracks these:
+ * while one exists, continued failures update it instead of opening a new one.
+ * Mirrors the incidents_one_unresolved_per_monitor index.
+ */
+export function isUnresolvedIncident(incident: Pick<Incident, "status" | "resolved_at">): boolean {
+  return incident.resolved_at === null && incident.status !== "resolved";
+}
+
 export function compareHealth(a: Health, b: Health): number {
   return RANK[b] - RANK[a];
 }

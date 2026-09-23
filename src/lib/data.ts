@@ -4,6 +4,7 @@ import { connection } from "next/server";
 import {
   compareHealth,
   isActiveIncident,
+  isUnresolvedIncident,
   monitorHealth,
   needsAttention,
   rollUpHealth,
@@ -74,6 +75,8 @@ export interface MonitorView {
   summary: MonitorCheckSummary | undefined;
   health: Health;
   activeIncident: Incident | undefined;
+  /** Any not-yet-resolved incident, including ignored ones. */
+  unresolvedIncident: Incident | undefined;
 }
 
 export interface WebsiteView {
@@ -158,6 +161,7 @@ function buildAppData(s: Snapshot): Omit<AppData, "source" | "loadedAt"> {
         website.active && client.active,
       ),
       activeIncident: monitorIncidents.find(isActiveIncident),
+      unresolvedIncident: monitorIncidents.find(isUnresolvedIncident),
     });
   }
 
