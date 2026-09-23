@@ -2,9 +2,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
+import { CheckHistoryTable } from "@/components/check-history-table";
 import { RunCheckButton } from "@/components/run-check-button";
 import { CheckStatusBadge, HealthBadge, IncidentStatusBadge, SeverityBadge } from "@/components/status";
-import { EmptyState, Panel, PageHeader, When, table } from "@/components/ui";
+import { Panel, PageHeader, When } from "@/components/ui";
 import { getAppData, getCheckHistory, type MonitorView } from "@/lib/data";
 import { displayUrl, formatDateTime, timeAgo } from "@/lib/format";
 import { failingSince } from "@/lib/health";
@@ -114,7 +115,9 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
           <div className="flex flex-wrap items-center gap-3 px-4 py-3 text-sm">
             <SeverityBadge severity={activeIncident.severity} />
             <IncidentStatusBadge status={activeIncident.status} />
-            <span className="font-medium">{activeIncident.title}</span>
+            <Link href={`/incidents/${activeIncident.id}`} className="font-medium text-fig-plum hover:underline">
+              {activeIncident.title}
+            </Link>
             <span className="text-slate-500">
               First detected {formatDateTime(activeIncident.first_detected_at)} ({timeAgo(activeIncident.first_detected_at)})
             </span>
@@ -124,40 +127,7 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
 
       <div className="grid grid-cols-[2fr_1fr] items-start gap-6">
         <Panel title="Recent checks" aside={`Latest ${Math.min(history.length, HISTORY_LIMIT)}`}>
-          {history.length === 0 ? (
-            <EmptyState>No checks have run yet.</EmptyState>
-          ) : (
-            <div className={table.wrapper}>
-              <table className={table.table}>
-                <thead className={table.head}>
-                  <tr>
-                    <th className={table.th}>Result</th>
-                    <th className={table.th}>Checked</th>
-                    <th className={table.th}>HTTP</th>
-                    <th className={table.th}>Time</th>
-                    <th className={table.th}>Details</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {history.map((check) => (
-                    <tr key={check.id} className={table.row}>
-                      <td className={table.td}>
-                        <CheckStatusBadge status={check.status} />
-                      </td>
-                      <td className={table.td}>
-                        <When iso={check.checked_at} />
-                      </td>
-                      <td className={table.td}>{check.http_status ?? "—"}</td>
-                      <td className={`${table.td} whitespace-nowrap`}>
-                        {check.response_time_ms !== null ? `${check.response_time_ms} ms` : "—"}
-                      </td>
-                      <td className={`${table.td} text-xs text-red-700`}>{check.error_message}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <CheckHistoryTable checks={history} />
         </Panel>
 
         <Panel title="Configuration">
