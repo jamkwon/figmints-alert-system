@@ -10,7 +10,9 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 - **Phase 2 (basic HTTP monitoring): done.** Real HTTP checks (status code, response time, expected content), stored check history, a Monitor detail page, and a manual **Run check** button.
 - **Phase 3 (incident engine): done.** Incidents open and resolve automatically from check results. An Incident detail page offers status actions, team assignment and internal notes, and the Dashboard lists failing checks that don't have an incident yet.
 
-Checks run **only when someone clicks Run check**; scheduled checks arrive in Phase 4. Running checks and updating incidents require Supabase. On sample data those controls are disabled.
+- **Phase 4 (scheduled monitoring): done.** One scheduled worker, triggered every 5 minutes by Supabase `pg_cron`, checks every monitor that is due according to its interval. See **Scheduled checks**.
+
+Running checks and updating incidents require Supabase. On sample data those controls are disabled.
 
 ## Stack
 
@@ -40,6 +42,7 @@ Copy `.env.example` to `.env.local`:
 | --- | --- | --- |
 | `SUPABASE_URL` | For real data | Supabase project URL |
 | `SUPABASE_SECRET_KEY` | For real data | Supabase secret key (`sb_secret_...`) or legacy `service_role` key. **Server-only.** |
+| `CRON_SECRET` | For scheduled checks | Random string (16+ characters) that the scheduler must send. See **Scheduled checks**. |
 | `APP_TIMEZONE` | No | Timezone for displayed times. Default `America/New_York`. |
 
 Both Supabase variables must be set for the app to use Supabase. Settings shows which data source is active and which variable names it found.
@@ -71,6 +74,7 @@ The schema lives in `supabase/migrations/`. Sample data lives in `supabase/seed.
 2. Open **SQL Editor** and run each file in `supabase/migrations/` **in filename order**:
    - `20260922000000_initial_schema.sql`
    - `20260923000000_incident_engine.sql` (Phase 3)
+   - `20260924000000_scheduler.sql` (Phase 4)
 3. (Optional) Run `supabase/seed.sql` to load the 6 sample clients. You can re-run it safely; it replaces the earlier sample rows.
 4. Copy the project URL and the secret key into `.env.local`, then restart `npm run dev`.
 
@@ -115,7 +119,8 @@ Row-level security is enabled on every table with **no policies**. The public an
 ```
 src/
   app/                  Routes: dashboard, clients, clients/[id], monitors/[id], incidents, incidents/[id], checks, settings
-    actions.ts          Server actions: Run check, incident status, team and notes
+    actions.ts          Server actions: Run check, Run due checks, incident status, team and notes
+    api/cron/run-checks Scheduler endpoint (called by Supabase pg_cron)
   components/           Sidebar, status badges, shared tables, Run check button, UI primitives
   lib/
     data.ts             Loads data (Supabase or sample) and builds view models
@@ -126,11 +131,13 @@ src/
       url-safety.ts     SSRF protection
       incident-engine.ts Pure rules: when to open, update or resolve an incident
       record.ts         Runs a check, saves the result, applies incident rules
+      scheduler.ts      Claims due monitors and checks them in parallel
     sample-data.ts      Built-in sample data (mirrors supabase/seed.sql)
     supabase/server.ts  Server-only Supabase client
     types.ts            Row types matching the SQL schema
 supabase/
-  migrations/           SQL schema
+  migrations/           SQL schema (run in filename order)
+  setup/                One-time setup scripts (scheduling)
   seed.sql              Sample data
 ```
 
@@ -203,9 +210,39 @@ Snoozed and Expected Maintenance incidents drop out of **Needs attention** and s
 - **Website / client:** the worst status among active monitors and active incidents. Anything inactive shows as inactive.
 - Order: Critical > Warning > Informational > No data > Healthy.
 
+## Scheduled checks
+
+One scheduled worker checks every monitor that's due. There are no per-website cron jobs.
+
+1. Every **5 minutes**, Supabase's built-in scheduler (`pg_cron`) calls `POST /api/cron/run-checks`, authenticated with `CRON_SECRET`.
+2. The endpoint **claims** up to 20 due monitors with the `claim_due_monitors` database function. "Due" means active monitor, website and client, with *next check* now or within the next minute. Claiming locks those monitors for 5 minutes, so overlapping or duplicate calls never check the same monitor twice.
+3. It checks them 5 at a time. Each check is saved, incident rules are applied, and *next check* is set to now + the monitor's interval.
+4. If time runs short (40 s), the remaining claimed monitors are picked up by the next run. With more than 20 due monitors, the backlog drains over the following runs.
+
+**Intervals:** 5 min, 15 min, 30 min, 1 hour, 6 hours, or daily (enforced by the database). A new monitor with no *next check* is due right away.
+
+**Why Supabase and not Vercel Cron?** On Vercel's Hobby plan, cron jobs can run only once a day, and a more frequent schedule makes deployments fail. On Pro you could instead add a `crons` entry to `vercel.json` pointing at `/api/cron/run-checks` (Vercel sends `CRON_SECRET` automatically).
+
+### Setting it up (once)
+
+1. **Run the migration** `supabase/migrations/20260924000000_scheduler.sql` in the Supabase SQL Editor.
+2. **Create a secret:** run `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` and copy the output.
+3. **Add it to Vercel:** Project → Settings → Environment Variables → `CRON_SECRET` = that value (Production, Sensitive). Redeploy.
+4. **If production uses Vercel Authentication** (Deployment Protection → *All Deployments*): Deployment Protection → **Protection Bypass for Automation** → create a secret. Scheduled calls come from Supabase, not a logged-in user, so they need it.
+5. **Schedule it:** open `supabase/setup/schedule-checks.sql`, replace the three placeholders (production URL, `CRON_SECRET`, bypass secret), and run it in the Supabase SQL Editor. The values are stored encrypted in Supabase Vault. Don't commit a filled-in copy.
+6. **Verify:** within 5 minutes, **Settings → Scheduled checks** should show a recent *Most recent check*, and monitors should show *Next check* times. The bottom of `schedule-checks.sql` has queries for troubleshooting (run history, HTTP responses).
+
+**Settings → Run due checks now** runs the same worker immediately, which is useful for testing or catching up. For local development you can also call the endpoint directly:
+
+```bash
+curl -X POST http://localhost:3000/api/cron/run-checks -H "Authorization: Bearer $CRON_SECRET"
+```
+
 ## Security notes
 
 - This is an internal tool, but **it has no login yet**. Before deploying anywhere reachable, put it behind Vercel Deployment Protection (or add authentication in a later phase).
 - All database access runs server-side.
 - **SSRF protection** (`src/lib/monitoring/url-safety.ts`): only `http`/`https` on ports 80, 443, 8080 or 8443; no credentials in URLs; no internal hostnames (`localhost`, `*.local`, single-word names). Every DNS answer is checked **at connection time**, so private, loopback, link-local (including the `169.254.169.254` cloud metadata address), CGNAT, multicast and reserved IPv4/IPv6 addresses are refused, even after a redirect or a DNS change.
 - The Run check action accepts only a monitor ID and always fetches the URL stored in the database. It can't be used to request arbitrary addresses. Without a login, though, anyone who can reach the app can trigger checks of existing monitors, which is another reason to keep Deployment Protection on.
+- The scheduler endpoint refuses every request unless `CRON_SECRET` (16+ characters) is set and sent as `Authorization: Bearer …`. The comparison is constant-time. It only checks monitors already in the database.
+- `claim_due_monitors` can only be called with the secret key; execution is revoked from the public `anon` and `authenticated` roles.
