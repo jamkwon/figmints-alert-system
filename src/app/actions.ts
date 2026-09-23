@@ -5,6 +5,7 @@ import { isUnresolvedIncident } from "@/lib/health";
 import { INCIDENT_STATUS_LABELS, TEAM_LABELS } from "@/lib/labels";
 import type { IncidentDecision } from "@/lib/monitoring/incident-engine";
 import { runAndRecordCheck } from "@/lib/monitoring/record";
+import { runDueChecks } from "@/lib/monitoring/scheduler";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
 import type { AssignedTeam, Incident, IncidentStatus, Monitor } from "@/lib/types";
 
@@ -142,4 +143,24 @@ export async function updateIncidentDetailsAction(
   if (error) return { ok: false, message: `Could not save: ${error.message}` };
   refresh();
   return { ok: true, message: "Saved." };
+}
+
+// Scheduler ----------------------------------------------------------------------
+
+/** Runs the scheduled worker now (same as a cron tick). Checks only monitors that are due. */
+export async function runDueChecksAction(): Promise<RunCheckResult> {
+  if (!isSupabaseConfigured()) return { ok: false, message: "Connect Supabase to run checks." };
+  try {
+    const s = await runDueChecks();
+    refresh();
+    if (s.claimed === 0) return { ok: true, message: "No monitors are due right now." };
+    const parts = [`Checked ${s.checked}: ${s.passed} passed, ${s.failed} failed`];
+    if (s.incidentsOpened) parts.push(`${s.incidentsOpened} incident(s) opened`);
+    if (s.incidentsResolved) parts.push(`${s.incidentsResolved} resolved`);
+    if (s.deferred) parts.push(`${s.deferred} left for the next run`);
+    if (s.errors.length) parts.push(`${s.errors.length} error(s): ${s.errors[0].message}`);
+    return { ok: s.errors.length === 0, message: parts.join(" · ") };
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "Scheduler failed." };
+  }
 }

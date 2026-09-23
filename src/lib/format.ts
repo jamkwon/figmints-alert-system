@@ -36,14 +36,18 @@ export function formatFull(iso: string): string {
   return full.format(new Date(iso));
 }
 
+/** "12 min ago", or "in 3 min" for future times (e.g. next scheduled check). */
 export function timeAgo(iso: string, now: Date = new Date()): string {
-  const minutes = Math.round((now.getTime() - new Date(iso).getTime()) / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes} min ago`;
+  const diff = Math.round((now.getTime() - new Date(iso).getTime()) / 60_000);
+  const future = diff < 0;
+  const minutes = Math.abs(diff);
+  if (minutes < 1) return future ? "in under a minute" : "just now";
+  const wrap = (text: string) => (future ? `in ${text}` : `${text} ago`);
+  if (minutes < 60) return wrap(`${minutes} min`);
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} hr ago`;
+  if (hours < 24) return wrap(`${hours} hr`);
   const days = Math.floor(hours / 24);
-  return `${days} day${days === 1 ? "" : "s"} ago`;
+  return wrap(`${days} day${days === 1 ? "" : "s"}`);
 }
 
 export function formatDuration(fromIso: string, toIso: string): string {
@@ -57,4 +61,8 @@ export function formatDuration(fromIso: string, toIso: string): string {
 /** Hostname + path without protocol, for compact display. */
 export function displayUrl(url: string): string {
   return url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+}
+
+export function isInFuture(iso: string | null, now: Date = new Date()): boolean {
+  return iso !== null && new Date(iso).getTime() > now.getTime();
 }

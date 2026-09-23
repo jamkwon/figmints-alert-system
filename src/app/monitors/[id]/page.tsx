@@ -7,7 +7,7 @@ import { RunCheckButton } from "@/components/run-check-button";
 import { CheckStatusBadge, HealthBadge, IncidentStatusBadge, SeverityBadge } from "@/components/status";
 import { Panel, PageHeader, When } from "@/components/ui";
 import { getAppData, getCheckHistory, type MonitorView } from "@/lib/data";
-import { displayUrl, formatDateTime, timeAgo } from "@/lib/format";
+import { displayUrl, formatDateTime, isInFuture, timeAgo } from "@/lib/format";
 import { failingSince } from "@/lib/health";
 import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS, SEVERITY_LABELS, formatInterval } from "@/lib/labels";
 import { DEFAULT_MAX_RESPONSE_TIME_MS } from "@/lib/monitoring/evaluate";
@@ -148,6 +148,15 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
               </ConfigRow>
             )}
             <ConfigRow label="Interval">{formatInterval(monitor.interval_minutes)}</ConfigRow>
+            <ConfigRow label="Next check">
+              {!monitor.active ? (
+                <span className="text-slate-500">Paused</span>
+              ) : isInFuture(monitor.next_check_at) ? (
+                <When iso={monitor.next_check_at} />
+              ) : (
+                <span className="text-slate-500">Due now (next scheduler run)</span>
+              )}
+            </ConfigRow>
             <ConfigRow label="Severity on failure">{SEVERITY_LABELS[monitor.severity_on_failure]}</ConfigRow>
             <ConfigRow label="Active">{monitor.active ? "Yes" : "No (paused)"}</ConfigRow>
           </dl>
