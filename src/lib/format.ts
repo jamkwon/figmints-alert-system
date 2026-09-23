@@ -66,3 +66,11 @@ export function displayUrl(url: string): string {
 export function isInFuture(iso: string | null, now: Date = new Date()): boolean {
   return iso !== null && new Date(iso).getTime() > now.getTime();
 }
+
+/** "Jane Doe" → "JD", "jane.doe@figmints.com" → "JD". */
+export function initials(name: string | null, email: string): string {
+  const source = name?.trim() || email.split("@")[0];
+  const parts = source.split(/[\s._-]+/).filter(Boolean);
+  const letters = parts.length > 1 ? parts[0][0] + parts[parts.length - 1][0] : source.slice(0, 2);
+  return letters.toUpperCase();
+}

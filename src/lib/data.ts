@@ -10,6 +10,7 @@ import {
   rollUpHealth,
   type Health,
 } from "@/lib/health";
+import { requireStaff } from "@/lib/auth/session";
 import { buildSampleData } from "@/lib/sample-data";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
 import type {
@@ -214,6 +215,8 @@ function buildAppData(s: Snapshot): Omit<AppData, "source" | "loadedAt"> {
 }
 
 export const getAppData = cache(async (): Promise<AppData> => {
+  // Data access layer: every read of client data is behind the staff check.
+  await requireStaff();
   const snapshot = await loadSnapshot();
   return {
     source: getDataSource(),
@@ -224,6 +227,7 @@ export const getAppData = cache(async (): Promise<AppData> => {
 
 /** Most recent checks for one monitor, newest first. */
 export async function getCheckHistory(monitorId: string, limit = 50): Promise<CheckResult[]> {
+  await requireStaff();
   await connection();
   if (!isSupabaseConfigured()) {
     return loadSampleData()
