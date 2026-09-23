@@ -6,6 +6,7 @@ import { HealthBadge } from "@/components/status";
 import { Panel, PageHeader, When } from "@/components/ui";
 import { getDataSource, getSchedulerStatus } from "@/lib/data";
 import { APP_TIMEZONE } from "@/lib/format";
+import { allowedDomains } from "@/lib/auth/session";
 import { supabaseEnvStatus } from "@/lib/supabase/server";
 
 export const metadata: Metadata = { title: "Settings" };
@@ -72,6 +73,19 @@ export default async function SettingsPage() {
           </Row>
           <Row label="Supabase secret key">
             <EnvStatus found={env.secretKey} options={env.secretKeyOptions} />
+          </Row>
+          <Row label="Supabase login key">
+            <EnvStatus found={env.publicKey} options={env.publicKeyOptions} />
+          </Row>
+          <Row label="Who can sign in">
+            Google accounts ending in{" "}
+            {allowedDomains().map((d, i) => (
+              <Fragment key={d}>
+                {i > 0 && ", "}
+                <strong>@{d}</strong>
+              </Fragment>
+            ))}
+            {source === "sample" && <span className="text-slate-500"> (login is off on sample data)</span>}
           </Row>
         </dl>
         {source === "sample" && (

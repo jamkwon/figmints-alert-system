@@ -1,6 +1,7 @@
 "use server";
 
 import { refresh } from "next/cache";
+import { isStaffRequest } from "@/lib/auth/session";
 import { isUnresolvedIncident } from "@/lib/health";
 import { INCIDENT_STATUS_LABELS, TEAM_LABELS } from "@/lib/labels";
 import type { IncidentDecision } from "@/lib/monitoring/incident-engine";
@@ -14,6 +15,8 @@ export interface RunCheckResult {
   message: string;
 }
 
+const SIGNED_OUT: RunCheckResult = { ok: false, message: "Your session has ended. Sign in again." };
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // Stops repeated clicks from hammering a client's site.
 const MIN_SECONDS_BETWEEN_RUNS = 10;
@@ -21,6 +24,7 @@ const MIN_SECONDS_BETWEEN_RUNS = 10;
 // Takes only a monitor ID: the URL always comes from the database, so this can't be
 // used to fetch arbitrary addresses. There is no login yet; see README (Security).
 export async function runCheckAction(monitorId: string): Promise<RunCheckResult> {
+  if (!(await isStaffRequest())) return SIGNED_OUT;
   if (!isSupabaseConfigured()) {
     return { ok: false, message: "Connect Supabase to run checks." };
   }
@@ -106,6 +110,7 @@ async function loadIncidentState(incidentId: string): Promise<IncidentActionResu
 
 /** Status actions: Mark Investigating, Snooze, Expected Maintenance, Ignore, Resolve, Reopen. */
 export async function setIncidentStatusAction(incidentId: string, status: IncidentStatus): Promise<IncidentActionResult> {
+  if (!(await isStaffRequest())) return SIGNED_OUT;
   if (!SETTABLE_STATUSES.includes(status)) return { ok: false, message: "Unknown status." };
   const loaded = await loadIncidentState(incidentId);
   if ("ok" in loaded) return loaded;
@@ -127,6 +132,7 @@ export async function updateIncidentDetailsAction(
   team: AssignedTeam,
   notes: string,
 ): Promise<IncidentActionResult> {
+  if (!(await isStaffRequest())) return SIGNED_OUT;
   if (!TEAMS.includes(team)) return { ok: false, message: "Unknown team." };
   if (typeof notes !== "string") return { ok: false, message: "Invalid notes." };
   const cleanNotes = notes.replace(/\r\n/g, "\n").trim();
@@ -149,6 +155,7 @@ export async function updateIncidentDetailsAction(
 
 /** Runs the scheduled worker now (same as a cron tick). Checks only monitors that are due. */
 export async function runDueChecksAction(): Promise<RunCheckResult> {
+  if (!(await isStaffRequest())) return SIGNED_OUT;
   if (!isSupabaseConfigured()) return { ok: false, message: "Connect Supabase to run checks." };
   try {
     const s = await runDueChecks();

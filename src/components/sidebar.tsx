@@ -17,7 +17,7 @@ export function Sidebar() {
   const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
 
   return (
-    <aside className="sticky top-0 flex h-screen w-56 shrink-0 flex-col bg-fig-plum-dark text-white">
+    <aside className="sticky top-0 flex h-screen w-56 shrink-0 flex-col bg-fig-brand text-white">
       <Link href="/" className="block border-b border-white/10 px-5 py-5">
         <Image src="/figmints-logo-white.svg" alt="Figmints" width={120} height={37} priority />
         <div className="mt-2 font-display text-base font-medium tracking-wide">Website Watch</div>
