@@ -8,8 +8,9 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 
 - **Phase 1 (foundation): done.** App shell, database schema, sample data, and the Dashboard, Clients, Client detail, Incidents, Checks, and Settings screens.
 - **Phase 2 (basic HTTP monitoring): done.** Real HTTP checks (status code, response time, expected content), stored check history, a Monitor detail page, and a manual **Run check** button.
+- **Phase 3 (incident engine): done.** Incidents open and resolve automatically from check results. An Incident detail page offers status actions, team assignment and internal notes, and the Dashboard lists failing checks that don't have an incident yet.
 
-Checks run **only when someone clicks Run check**. Automatic incidents arrive in Phase 3, and scheduled checks in Phase 4. Running checks requires Supabase; on sample data the button is disabled.
+Checks run **only when someone clicks Run check**; scheduled checks arrive in Phase 4. Running checks and updating incidents require Supabase. On sample data those controls are disabled.
 
 ## Stack
 
@@ -67,7 +68,9 @@ The schema lives in `supabase/migrations/`. Sample data lives in `supabase/seed.
 ### Option A: Supabase dashboard (simplest)
 
 1. Create a Supabase project.
-2. Open **SQL Editor** and run the contents of `supabase/migrations/20260922000000_initial_schema.sql`.
+2. Open **SQL Editor** and run each file in `supabase/migrations/` **in filename order**:
+   - `20260922000000_initial_schema.sql`
+   - `20260923000000_incident_engine.sql` (Phase 3)
 3. (Optional) Run `supabase/seed.sql` to load the 6 sample clients. You can re-run it safely; it replaces the earlier sample rows.
 4. Copy the project URL and the secret key into `.env.local`, then restart `npm run dev`.
 
@@ -105,14 +108,14 @@ Row-level security is enabled on every table with **no policies**. The public an
 | `npm start` | Serve the production build |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | Generate route types and run `tsc` |
-| `npm test` | Unit tests for health rules, check evaluation and SSRF protection (Node's built-in test runner) |
+| `npm test` | Unit tests for health rules, check evaluation, incident rules and SSRF protection (Node's built-in test runner) |
 
 ## Project layout
 
 ```
 src/
-  app/                  Routes: dashboard, clients, clients/[id], monitors/[id], incidents, checks, settings
-    actions.ts          Server action: Run check
+  app/                  Routes: dashboard, clients, clients/[id], monitors/[id], incidents, incidents/[id], checks, settings
+    actions.ts          Server actions: Run check, incident status, team and notes
   components/           Sidebar, status badges, shared tables, Run check button, UI primitives
   lib/
     data.ts             Loads data (Supabase or sample) and builds view models
@@ -121,7 +124,8 @@ src/
       run-check.ts      Performs one HTTP check (redirects, timeout, body limit, error messages)
       evaluate.ts       Pure pass/fail rules for a check
       url-safety.ts     SSRF protection
-      record.ts         Runs a check and saves the result
+      incident-engine.ts Pure rules: when to open, update or resolve an incident
+      record.ts         Runs a check, saves the result, applies incident rules
     sample-data.ts      Built-in sample data (mirrors supabase/seed.sql)
     supabase/server.ts  Server-only Supabase client
     types.ts            Row types matching the SQL schema
@@ -165,6 +169,33 @@ select id, 'Contact Page', 'expected_content', 'https://acme.com/contact', 'Cont
 ```
 
 Then open **Checks**, click the monitor, and press **Run check**.
+
+## How incidents work
+
+An incident is a confirmed problem, not a single failed request. After every check, the incident engine (`src/lib/monitoring/incident-engine.ts`) looks at the monitor's recent checks:
+
+| Situation | What happens |
+| --- | --- |
+| 1 failed or slow check | Nothing yet. The Dashboard lists it under **Failing checks, no incident yet**. |
+| 2 failed or slow checks in a row, no unresolved incident | **Incident opens**. *First detected* is the first failure in the streak. |
+| Still failing with an incident | The incident's *last detected* time and description update. Severity can go up (slow → down), never down. |
+| 1 success | Nothing yet. One good check isn't enough. |
+| 2 successes in a row | **Incident resolves** automatically, whatever its status (Open, Investigating, Snoozed, Expected Maintenance). |
+
+- **Severity:** a failed check uses the monitor's *severity on failure*. A slow response is at most **Warning**.
+- **Titles** describe the failure, e.g. "Contact Page returning HTTP 500", "Expected content missing on Contact Page", "Homepage is unreachable".
+- **Ignored** incidents stay out of the Needs attention list. While one is unresolved, continued failures don't open new incidents. When the site recovers it's closed, but keeps the *Ignored* status so the history shows nobody acted on it.
+- **Only one unresolved incident per monitor.** A database index enforces this, so two checks finishing together can't open duplicates.
+
+### Incident actions
+
+On an incident's page (click any incident title):
+
+- **Status:** Mark Investigating, Snooze, Expected Maintenance, Ignore, Reopen, Resolve. A resolved incident is history and can't be reopened. If the problem returns, a new incident opens automatically.
+- **Assigned team:** Development, Account Management, SEO, Ads, Client or Unassigned.
+- **Internal notes:** free text, up to 5,000 characters. Editable even after an incident is closed.
+
+Snoozed and Expected Maintenance incidents drop out of **Needs attention** and show as informational (gray). Snoozing doesn't expire yet (see Phase 5).
 
 ## How health is determined
 
