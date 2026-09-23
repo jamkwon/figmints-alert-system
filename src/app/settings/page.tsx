@@ -1,13 +1,16 @@
 import type { Metadata } from "next";
 import { connection } from "next/server";
 import { Fragment, type ReactNode } from "react";
+import { RunDueChecksButton } from "@/components/run-due-checks-button";
 import { HealthBadge } from "@/components/status";
-import { Panel, PageHeader } from "@/components/ui";
-import { getDataSource } from "@/lib/data";
+import { Panel, PageHeader, When } from "@/components/ui";
+import { getDataSource, getSchedulerStatus } from "@/lib/data";
 import { APP_TIMEZONE } from "@/lib/format";
 import { supabaseEnvStatus } from "@/lib/supabase/server";
 
 export const metadata: Metadata = { title: "Settings" };
+// Allows the "Run due checks now" action to run a full batch.
+export const maxDuration = 60;
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -47,6 +50,9 @@ export default async function SettingsPage() {
   await connection();
   const source = getDataSource();
   const env = supabaseEnvStatus();
+  const cronSecretSet = (process.env.CRON_SECRET?.length ?? 0) >= 16;
+
+  const { dueNow, nextDue, lastCheck } = await getSchedulerStatus();
 
   return (
     <>
@@ -85,10 +91,37 @@ export default async function SettingsPage() {
           <Row label="Resolve an incident after">2 consecutive successful checks</Row>
           <Row label="Default HTTP success">Status 200–399 (unless a monitor sets an expected status)</Row>
           <Row label="Display timezone">{APP_TIMEZONE}</Row>
-          <Row label="Automated checks">
-            <span className="text-slate-500">
-              Manual only for now: use <strong>Run check</strong> on a monitor. Scheduled checks arrive in Phase 4.
-            </span>
+          <Row label="Check intervals">5 min, 15 min, 30 min, 1 hour, 6 hours, daily</Row>
+        </dl>
+      </Panel>
+
+      <Panel title="Scheduled checks" className="mt-6">
+        <dl>
+          <Row label="Scheduler">
+            Every 5 minutes via Supabase <code>pg_cron</code>. It checks only monitors that are due.{" "}
+            <span className="text-slate-500">Setup: README → Scheduled checks.</span>
+          </Row>
+          <Row label="CRON_SECRET">
+            {cronSecretSet ? (
+              <HealthBadge health="healthy" label="Set" />
+            ) : (
+              <span className="flex items-center gap-2">
+                <HealthBadge health="unknown" label="Not set" />
+                <span className="text-xs text-slate-500">The scheduler endpoint refuses all calls until it is.</span>
+              </span>
+            )}
+          </Row>
+          <Row label="Monitors due now">{dueNow}</Row>
+          <Row label="Next scheduled check">
+            <When iso={nextDue} empty="None scheduled" />
+          </Row>
+          <Row label="Most recent check">
+            <When iso={lastCheck} />
+          </Row>
+          <Row label="Run now">
+            <RunDueChecksButton
+              disabledReason={source === "sample" ? "Connect Supabase to run checks" : undefined}
+            />
           </Row>
         </dl>
       </Panel>

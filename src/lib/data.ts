@@ -239,3 +239,33 @@ export async function getCheckHistory(monitorId: string, limit = 50): Promise<Ch
   if (error) throw new Error(`Failed to load check history: ${error.message}`);
   return data as CheckResult[];
 }
+
+// Matches the scheduler's grace window in claim_due_monitors.
+const DUE_GRACE_MS = 60_000;
+
+export interface SchedulerStatus {
+  dueNow: number;
+  nextDue: string | null;
+  lastCheck: string | null;
+}
+
+/** When the scheduler will next have work, based on monitors' next_check_at. */
+export async function getSchedulerStatus(): Promise<SchedulerStatus> {
+  const { monitors } = await getAppData();
+  const running = monitors.filter((m) => m.health !== "inactive");
+  const dueCutoff = Date.now() + DUE_GRACE_MS;
+  const isDue = (next: string | null) => !next || new Date(next).getTime() <= dueCutoff;
+  const upcoming = running
+    .map((m) => m.monitor.next_check_at)
+    .filter((d): d is string => !isDue(d))
+    .sort();
+  const checked = running
+    .map((m) => m.monitor.last_checked_at)
+    .filter((d): d is string => d !== null)
+    .sort();
+  return {
+    dueNow: running.filter((m) => isDue(m.monitor.next_check_at)).length,
+    nextDue: upcoming[0] ?? null,
+    lastCheck: checked.at(-1) ?? null,
+  };
+}
