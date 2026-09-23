@@ -1,9 +1,12 @@
 "use server";
 
 import { refresh } from "next/cache";
+import { isUnresolvedIncident } from "@/lib/health";
+import { INCIDENT_STATUS_LABELS, TEAM_LABELS } from "@/lib/labels";
+import type { IncidentDecision } from "@/lib/monitoring/incident-engine";
 import { runAndRecordCheck } from "@/lib/monitoring/record";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
-import type { Monitor } from "@/lib/types";
+import type { AssignedTeam, Incident, IncidentStatus, Monitor } from "@/lib/types";
 
 export interface RunCheckResult {
   ok: boolean;
@@ -47,7 +50,7 @@ export async function runCheckAction(monitorId: string): Promise<RunCheckResult>
   }
 
   try {
-    const result = await runAndRecordCheck(monitor);
+    const { result, incident } = await runAndRecordCheck(monitor);
     refresh();
     const details = [
       result.http_status !== null ? `HTTP ${result.http_status}` : null,
@@ -55,9 +58,88 @@ export async function runCheckAction(monitorId: string): Promise<RunCheckResult>
     ]
       .filter(Boolean)
       .join(" · ");
-    if (result.passed) return { ok: true, message: `Passed${details ? ` · ${details}` : ""}` };
-    return { ok: false, message: `${result.status === "warning" ? "Warning" : "Failed"}: ${result.error_message}` };
+    const incidentNote = INCIDENT_NOTES[incident];
+    const message = result.passed
+      ? `Passed${details ? ` · ${details}` : ""}`
+      : `${result.status === "warning" ? "Warning" : "Failed"}: ${result.error_message}`;
+    return { ok: result.passed, message: incidentNote ? `${message} · ${incidentNote}` : message };
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : "Check failed to run." };
   }
+}
+
+const INCIDENT_NOTES: Record<IncidentDecision["kind"], string | null> = {
+  none: null,
+  open: "Incident opened",
+  update: null,
+  resolve: "Incident resolved",
+};
+
+// Incidents -----------------------------------------------------------------------
+
+export type IncidentActionResult = RunCheckResult;
+
+const SETTABLE_STATUSES: readonly IncidentStatus[] = [
+  "open",
+  "investigating",
+  "snoozed",
+  "expected_maintenance",
+  "ignored",
+  "resolved",
+];
+const TEAMS = Object.keys(TEAM_LABELS) as AssignedTeam[];
+const MAX_NOTES_LENGTH = 5000;
+
+async function loadIncidentState(incidentId: string): Promise<IncidentActionResult | { resolved: boolean }> {
+  if (!isSupabaseConfigured()) return { ok: false, message: "Connect Supabase to update incidents." };
+  if (typeof incidentId !== "string" || !UUID.test(incidentId)) return { ok: false, message: "Unknown incident." };
+  const { data, error } = await getSupabase()
+    .from("incidents")
+    .select("status, resolved_at")
+    .eq("id", incidentId)
+    .maybeSingle();
+  if (error) return { ok: false, message: `Could not load incident: ${error.message}` };
+  if (!data) return { ok: false, message: "Unknown incident." };
+  return { resolved: !isUnresolvedIncident(data as Pick<Incident, "status" | "resolved_at">) };
+}
+
+/** Status actions: Mark Investigating, Snooze, Expected Maintenance, Ignore, Resolve, Reopen. */
+export async function setIncidentStatusAction(incidentId: string, status: IncidentStatus): Promise<IncidentActionResult> {
+  if (!SETTABLE_STATUSES.includes(status)) return { ok: false, message: "Unknown status." };
+  const loaded = await loadIncidentState(incidentId);
+  if ("ok" in loaded) return loaded;
+  // Resolved incidents are history. If the problem returns, the engine opens a new one.
+  if (loaded.resolved) return { ok: false, message: "This incident is already closed." };
+
+  const { error } = await getSupabase()
+    .from("incidents")
+    .update({ status, resolved_at: status === "resolved" ? new Date().toISOString() : null })
+    .eq("id", incidentId);
+  if (error) return { ok: false, message: `Could not update incident: ${error.message}` };
+  refresh();
+  return { ok: true, message: `Marked ${INCIDENT_STATUS_LABELS[status]}.` };
+}
+
+/** Saves the assigned team and internal notes. Allowed on closed incidents too. */
+export async function updateIncidentDetailsAction(
+  incidentId: string,
+  team: AssignedTeam,
+  notes: string,
+): Promise<IncidentActionResult> {
+  if (!TEAMS.includes(team)) return { ok: false, message: "Unknown team." };
+  if (typeof notes !== "string") return { ok: false, message: "Invalid notes." };
+  const cleanNotes = notes.replace(/\r\n/g, "\n").trim();
+  if (cleanNotes.length > MAX_NOTES_LENGTH) {
+    return { ok: false, message: `Notes are limited to ${MAX_NOTES_LENGTH} characters.` };
+  }
+  const loaded = await loadIncidentState(incidentId);
+  if ("ok" in loaded) return loaded;
+
+  const { error } = await getSupabase()
+    .from("incidents")
+    .update({ assigned_team: team, internal_notes: cleanNotes })
+    .eq("id", incidentId);
+  if (error) return { ok: false, message: `Could not save: ${error.message}` };
+  refresh();
+  return { ok: true, message: "Saved." };
 }
