@@ -1,7 +1,8 @@
 import Link from "next/link";
-import { HealthBadge, HealthDot, IncidentStatusBadge, TeamLabel } from "@/components/status";
+import { RunCheckButton } from "@/components/run-check-button";
+import { CheckStatusBadge, HealthBadge, HealthDot, IncidentStatusBadge, TeamLabel } from "@/components/status";
 import { Panel, PageHeader, When, table } from "@/components/ui";
-import { getAppData, type ClientView, type IncidentView } from "@/lib/data";
+import { getAppData, type ClientView, type IncidentView, type MonitorView } from "@/lib/data";
 import { formatDateTime } from "@/lib/format";
 import { isActiveIncident, needsAttention, type Health } from "@/lib/health";
 import type { Severity } from "@/lib/types";
@@ -65,7 +66,9 @@ function AttentionRows({ severity, incidents }: { severity: Severity; incidents:
             )}
           </td>
           <td className={`${table.td} max-w-md`}>
-            <div className="font-medium text-fig-ink">{incident.title}</div>
+            <Link href={`/incidents/${incident.id}`} className="font-medium text-fig-ink hover:text-fig-plum hover:underline">
+              {incident.title}
+            </Link>
             {incident.description && <div className="mt-0.5 text-xs text-slate-600">{incident.description}</div>}
           </td>
           <td className={table.td}>
@@ -83,6 +86,63 @@ function AttentionRows({ severity, incidents }: { severity: Severity; incidents:
         </tr>
       ))}
     </>
+  );
+}
+
+/** Monitors whose latest check failed but that don't have an incident (yet). */
+function FailingChecks({ monitors, sampleMode }: { monitors: MonitorView[]; sampleMode: boolean }) {
+  return (
+    <div className={table.wrapper}>
+      <table className={table.table}>
+        <thead className={table.head}>
+          <tr>
+            <th className={table.th}>Client / Monitor</th>
+            <th className={table.th}>Latest result</th>
+            <th className={table.th}>Last checked</th>
+            <th className={table.th}>Last successful</th>
+            <th className={table.th}>
+              <span className="sr-only">Actions</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {monitors.map(({ monitor, client, summary }) => (
+            <tr key={monitor.id} className={table.row}>
+              <td className={table.td}>
+                <Link href={`/clients/${client.id}`} className="font-semibold text-fig-plum hover:underline">
+                  {client.name}
+                </Link>
+                <Link
+                  href={`/monitors/${monitor.id}`}
+                  className="block text-xs text-slate-500 hover:text-fig-plum hover:underline"
+                >
+                  {monitor.name}
+                </Link>
+              </td>
+              <td className={`${table.td} max-w-md`}>
+                {summary?.last_status && <CheckStatusBadge status={summary.last_status} />}
+                {summary?.last_error_message && (
+                  <div className="mt-1 text-xs text-red-700">{summary.last_error_message}</div>
+                )}
+              </td>
+              <td className={table.td}>
+                <When iso={monitor.last_checked_at} />
+              </td>
+              <td className={table.td}>
+                <When iso={summary?.last_success_at} />
+              </td>
+              <td className={`${table.td} text-right`}>
+                <RunCheckButton
+                  monitorId={monitor.id}
+                  compact
+                  disabledReason={sampleMode ? "Connect Supabase to run real checks" : undefined}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -111,6 +171,12 @@ export default async function DashboardPage() {
   const critical = attention.filter((i) => i.incident.severity === "critical");
   const warnings = attention.filter((i) => i.incident.severity === "warning");
   const openIncidents = data.incidents.filter((i) => isActiveIncident(i.incident));
+  const failingWithoutIncident = data.monitors.filter(
+    (m) =>
+      m.health !== "inactive" &&
+      !m.unresolvedIncident &&
+      (m.summary?.last_status === "failed" || m.summary?.last_status === "warning"),
+  );
 
   const activeClients = data.clients.filter((c) => c.client.active);
   const healthyClients = activeClients.filter((c) => c.health === "healthy");
@@ -181,6 +247,16 @@ export default async function DashboardPage() {
           </p>
         )}
       </Panel>
+
+      {failingWithoutIncident.length > 0 && (
+        <Panel
+          title="Failing checks, no incident yet"
+          aside="An incident opens after 2 failed checks in a row"
+          className="mb-6"
+        >
+          <FailingChecks monitors={failingWithoutIncident} sampleMode={data.source === "sample"} />
+        </Panel>
+      )}
 
       <div className="grid grid-cols-2 gap-6">
         <Panel title={`Healthy clients (${healthyClients.length})`}>
