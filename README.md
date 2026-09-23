@@ -11,6 +11,7 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 - **Phase 3 (incident engine): done.** Incidents open and resolve automatically from check results. An Incident detail page offers status actions, team assignment and internal notes, and the Dashboard lists failing checks that don't have an incident yet.
 
 - **Phase 4 (scheduled monitoring): done.** One scheduled worker, triggered every 5 minutes by Supabase `pg_cron`, checks every monitor that is due according to its interval. See **Scheduled checks**.
+- **Staff login: done.** Google sign-in limited to `@figmints.com` accounts. See **Login**.
 
 Running checks and updating incidents require Supabase. On sample data those controls are disabled.
 
@@ -42,6 +43,8 @@ Copy `.env.example` to `.env.local`:
 | --- | --- | --- |
 | `SUPABASE_URL` | For real data | Supabase project URL |
 | `SUPABASE_SECRET_KEY` | For real data | Supabase secret key (`sb_secret_...`) or legacy `service_role` key. **Server-only.** |
+| `SUPABASE_PUBLISHABLE_KEY` | For login | Supabase publishable (or legacy anon) key, used only for the login session. Also accepted: `SUPABASE_ANON_KEY`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`. |
+| `ALLOWED_EMAIL_DOMAINS` | No | Comma-separated domains allowed to sign in. Default `figmints.com`. |
 | `CRON_SECRET` | For scheduled checks | Random string (16+ characters) that the scheduler must send. See **Scheduled checks**. |
 | `APP_TIMEZONE` | No | Timezone for displayed times. Default `America/New_York`. |
 
@@ -112,18 +115,22 @@ Row-level security is enabled on every table with **no policies**. The public an
 | `npm start` | Serve the production build |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | Generate route types and run `tsc` |
-| `npm test` | Unit tests for health rules, check evaluation, incident rules and SSRF protection (Node's built-in test runner) |
+| `npm test` | Unit tests for health rules, check evaluation, incident rules, login rules and SSRF protection (Node's built-in test runner) |
 
 ## Project layout
 
 ```
 src/
-  app/                  Routes: dashboard, clients, clients/[id], monitors/[id], incidents, incidents/[id], checks, settings
+  proxy.ts              Login check before every request (refreshes the session)
+  app/
+    (app)/              Signed-in pages: dashboard, clients, monitors, incidents, checks, settings
+    login/, auth/       Sign-in page, Google sign-in and sign-out actions, OAuth callback
     actions.ts          Server actions: Run check, Run due checks, incident status, team and notes
     api/cron/run-checks Scheduler endpoint (called by Supabase pg_cron)
   components/           Sidebar, status badges, shared tables, Run check button, UI primitives
   lib/
     data.ts             Loads data (Supabase or sample) and builds view models
+    auth/               Who may sign in (allowed.ts) and the staff check (session.ts)
     health.ts           Health rules: monitor → website → client roll-up
     monitoring/
       run-check.ts      Performs one HTTP check (redirects, timeout, body limit, error messages)
@@ -238,11 +245,42 @@ One scheduled worker checks every monitor that's due. There are no per-website c
 curl -X POST http://localhost:3000/api/cron/run-checks -H "Authorization: Bearer $CRON_SECRET"
 ```
 
+## Login
+
+Staff sign in with **Google**. Only accounts on an allowed domain (`figmints.com` by default) get in. Everyone else is sent back to the login page.
+
+- **Where it's enforced:**
+  - `src/proxy.ts` runs before every page and action. It refreshes the session and redirects anyone who isn't signed-in staff to `/login`.
+  - Every page and data load checks again (`requireStaff()` in `src/lib/auth/session.ts`), and so does every server action.
+- **Who counts as staff:** signed in **with Google** (Google verifies the email) **and** the email's domain exactly matches `ALLOWED_EMAIL_DOMAINS`. Google's `hd` hint pre-selects the Figmints account, but the domain is enforced on the server, not by Google.
+- **Keys:** the sign-in flow runs on the server and uses the Supabase **publishable** key only for the session cookie. Data is still read with the secret key, on the server, after the staff check. No key is sent to the browser.
+- **Sample-data mode** (no Supabase) has no login, because there's no real data to protect.
+- **The scheduler endpoint** (`/api/cron/run-checks`) doesn't use login; it has its own `CRON_SECRET`.
+- **If Supabase is connected but the publishable key is missing,** the app locks everything and the login page says why. It never falls open.
+
+### Setting up Google sign-in (once)
+
+1. **Google Cloud Console → APIs & Services**
+   - **OAuth consent screen:** User type **Internal**, which limits sign-in to your Google Workspace. App name: *Website Watch*.
+   - **Credentials → Create credentials → OAuth client ID → Web application.**
+   - **Authorized redirect URI:** `https://<your-project-ref>.supabase.co/auth/v1/callback`. Find it in Supabase → Authentication → Sign In / Providers → Google, labeled *Callback URL*.
+   - Copy the **Client ID** and **Client secret**.
+2. **Supabase → Authentication → Sign In / Providers → Google:** enable it and paste the Client ID and secret.
+3. **Supabase → Authentication → URL Configuration:**
+   - **Site URL:** `https://figmints-alert-system.vercel.app`
+   - **Redirect URLs:** add `https://figmints-alert-system.vercel.app/auth/callback` and `http://localhost:3000/auth/callback`
+4. **Recommended:** Supabase → Authentication → Sign In / Providers → **Email**: turn it off. Only Google sign-ins are accepted anyway, but this stops stray email sign-ups.
+5. **Environment variables:**
+   - **Vercel:** the Supabase integration already provides `SUPABASE_PUBLISHABLE_KEY` (or `SUPABASE_ANON_KEY`). Optionally set `ALLOWED_EMAIL_DOMAINS`.
+   - **Local `.env.local`:** add `SUPABASE_PUBLISHABLE_KEY=sb_publishable_...` from Supabase → Project Settings → API Keys.
+6. **Deploy, and check:** open the app. You should land on the Figmints sign-in page, and your `@figmints.com` Google account should get you in. Your name appears at the bottom of the sidebar, with **Sign out**.
+7. **Then turn off Vercel Authentication** (Deployment Protection) so colleagues can reach the login page. Keep the automation bypass secret; it's harmless once protection is off. If you prefer to keep protection on as a second layer, only people with access to the Vercel project will be able to open the app.
+
 ## Security notes
 
-- This is an internal tool, but **it has no login yet**. Before deploying anywhere reachable, put it behind Vercel Deployment Protection (or add authentication in a later phase).
+- **Login is required** for every page and action when Supabase is connected (see **Login**). Sample-data mode has no login.
 - All database access runs server-side.
 - **SSRF protection** (`src/lib/monitoring/url-safety.ts`): only `http`/`https` on ports 80, 443, 8080 or 8443; no credentials in URLs; no internal hostnames (`localhost`, `*.local`, single-word names). Every DNS answer is checked **at connection time**, so private, loopback, link-local (including the `169.254.169.254` cloud metadata address), CGNAT, multicast and reserved IPv4/IPv6 addresses are refused, even after a redirect or a DNS change.
-- The Run check action accepts only a monitor ID and always fetches the URL stored in the database. It can't be used to request arbitrary addresses. Without a login, though, anyone who can reach the app can trigger checks of existing monitors, which is another reason to keep Deployment Protection on.
+- The Run check action accepts only a monitor ID and always fetches the URL stored in the database. It can't be used to request arbitrary addresses. Only signed-in staff can run it.
 - The scheduler endpoint refuses every request unless `CRON_SECRET` (16+ characters) is set and sent as `Authorization: Bearer …`. The comparison is constant-time. It only checks monitors already in the database.
 - `claim_due_monitors` can only be called with the secret key; execution is revoked from the public `anon` and `authenticated` roles.
