@@ -14,6 +14,7 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 - **Staff login: done.** Google sign-in limited to `@figmints.com` accounts. See **Login**.
 - **Phase 5 (operational improvements): done.** Add/edit clients, websites and monitors in the app (with bulk monitor setup), filters, timed snooze, website maintenance windows, uptime percentages, incident history, and automatic check-history cleanup.
 - **Phase 9 (alerts): Slack done.** Critical incidents are posted to a Slack channel when they open and when they resolve. See **Alerts**. Email and Basecamp aren't built yet.
+- **Phase 8 (advanced monitoring): SSL certificate expiry done.** An *SSL Certificate* monitor warns before a site's certificate expires. See **SSL certificates**.
 
 Running checks and updating incidents require Supabase. On sample data those controls are disabled.
 
@@ -84,6 +85,7 @@ The schema lives in `supabase/migrations/`. Sample data lives in `supabase/seed.
    - `20260924000000_scheduler.sql` (Phase 4)
    - `20260925000000_operations.sql` (Phase 5)
    - `20260926000000_alerts.sql` (Phase 9)
+   - `20260927000000_ssl_expiry.sql` (Phase 8, SSL)
 3. (Optional) Run `supabase/seed.sql` to load the 6 sample clients. You can re-run it safely; it replaces the earlier sample rows.
 4. Copy the project URL and the secret key into `.env.local`, then restart `npm run dev`.
 
@@ -123,7 +125,7 @@ Row-level security is enabled on every table with **no policies**. The public an
 | `npm start` | Serve the production build |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | Generate route types and run `tsc` |
-| `npm test` | Unit tests for health rules, check evaluation, incident rules, alert rules, login rules, form validation and SSRF protection (Node's built-in test runner) |
+| `npm test` | Unit tests for health rules, check evaluation (HTTP and SSL), incident rules, alert rules, login rules, form validation and SSRF protection (Node's built-in test runner) |
 
 ## Project layout
 
@@ -168,6 +170,7 @@ Each check makes one `GET` request to the monitor's target URL and stores the re
 | HTTP Status | Status is 200–399, or exactly the monitor's *expected status* if one is set | Failed |
 | Expected Content | Status passes **and** the expected text appears in the page's visible text | Failed |
 | Response Time | Status passes **and** the full response takes no longer than *max response time* (default 3000 ms) | Warning (slow) |
+| SSL Certificate | The certificate is trusted, matches the domain, and has more than 14 days left | Warning at 14 days or less; Failed at 3 days or less, or when expired, untrusted or for the wrong domain |
 
 Any monitor with *expected text* set also checks the text, whatever its type.
 
@@ -199,6 +202,18 @@ Everything is managed in the app (Supabase must be connected):
 - **Deactivate a client:** **Edit client** → untick **Active**. Its history is kept.
 
 All URLs go through the same SSRF rules as the checks. Private addresses, `localhost`, unusual ports and non-http(s) URLs are rejected when you save.
+
+### SSL certificates
+
+An **SSL Certificate** monitor opens a secure connection to the website (port 443), reads the certificate, and hangs up. It doesn't load the page.
+
+- **Adding one:** tick **Also check the SSL certificate** on **Add client** or **Add monitors**. It's checked every 6 hours, and each website gets at most one.
+- **When it warns or fails:**
+  - **Warning** at 14 days left, which opens a Warning incident after 2 checks (never alerts on Slack).
+  - **Failed** at 3 days left, or when the certificate is expired, untrusted, self-signed or for the wrong domain. That uses the monitor's severity (Critical by default), so it alerts.
+- **Where you see it:** the expiry date and days left appear in monitor tables and on the monitor page, along with the issuer.
+- **Uptime:** SSL monitors don't count toward uptime, because an expiring certificate isn't downtime.
+- **Safety:** the connection uses the same SSRF protection as page checks.
 
 ### Maintenance windows
 
