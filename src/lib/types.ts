@@ -1,7 +1,7 @@
 // Row types mirror supabase/migrations. Keep them in sync when the schema changes.
 
 export type Environment = "production" | "staging" | "development";
-export type MonitorType = "http_status" | "response_time" | "expected_content" | "ssl_expiry";
+export type MonitorType = "http_status" | "response_time" | "expected_content" | "ssl_expiry" | "broken_links";
 export type CheckStatus = "passed" | "failed" | "warning";
 export type Severity = "critical" | "warning" | "informational";
 export type IncidentStatus =
