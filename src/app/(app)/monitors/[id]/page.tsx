@@ -11,6 +11,7 @@ import {
   certificateInfo,
   displayUrl,
   linkScanInfo,
+  trackingInfo,
   formatDate,
   formatDateTime,
   formatUptime,
@@ -20,6 +21,7 @@ import {
 import { failingSince } from "@/lib/health";
 import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS, SEVERITY_LABELS, formatInterval } from "@/lib/labels";
 import { DEFAULT_MAX_RESPONSE_TIME_MS, SSL_FAILURE_DAYS, SSL_WARNING_DAYS } from "@/lib/monitoring/evaluate";
+import { TRACKING_TAGS, TRACKING_TAG_KEYS } from "@/lib/monitoring/tracking";
 
 // Run check can start a broken link scan, which takes up to ~40 seconds.
 export const maxDuration = 60;
@@ -61,6 +63,8 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
   const { monitor, website, client, summary, health, activeIncident, uptime } = view;
   const isSsl = monitor.monitor_type === "ssl_expiry";
   const isLinkScan = monitor.monitor_type === "broken_links";
+  const isTracking = monitor.monitor_type === "tracking_tags";
+  const tags = isTracking ? trackingInfo(summary?.last_metadata) : null;
   const cert = isSsl ? certificateInfo(summary?.last_metadata) : null;
   const scan = isLinkScan ? linkScanInfo(summary?.last_metadata) : null;
   const uptimeRows = [
@@ -161,7 +165,38 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
         </Panel>
 
         <div className="space-y-6">
-          {isLinkScan ? (
+          {isTracking ? (
+            <Panel title="Tracking tags" aside={<Link href={`/monitors/${monitor.id}/edit`} className="text-fig-plum hover:underline">Choose tags</Link>}>
+              <ul className="divide-y divide-slate-100">
+                {TRACKING_TAG_KEYS.filter((t) => monitor.expected_tags.includes(t) || tags?.found[t]).map((t) => {
+                  const expected = monitor.expected_tags.includes(t);
+                  const ids = tags?.found[t];
+                  return (
+                    <li key={t} className="flex items-start justify-between gap-3 px-4 py-2.5 text-sm">
+                      <div>
+                        <div className="font-medium text-fig-ink">{TRACKING_TAGS[t].label}</div>
+                        <div className="text-xs text-slate-500">
+                          {ids ? (ids.length ? ids.join(", ") : "Found (no ID shown)") : "Not on the page"}
+                          {!expected && " · found, not expected"}
+                        </div>
+                      </div>
+                      {expected && (
+                        <HealthBadge
+                          health={!tags ? "unknown" : ids ? "healthy" : "critical"}
+                          label={!tags ? "Not checked" : ids ? "Present" : "Missing"}
+                        />
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+              {monitor.expected_tags.length === 0 && (
+                <p className="border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
+                  No tags are expected yet, so this check always passes. Choose the tags this page must have.
+                </p>
+              )}
+            </Panel>
+          ) : isLinkScan ? (
             <Panel title="Broken links" aside={scan ? `${scan.checked} of ${scan.found} checked` : undefined}>
               {!scan ? (
                 <p className="px-4 py-4 text-sm text-slate-500">Not scanned yet.</p>
@@ -235,7 +270,7 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
               <ConfigRow label="Website">
                 {displayUrl(website.url)} · {ENVIRONMENT_LABELS[website.environment]}
               </ConfigRow>
-              {!isSsl && !isLinkScan && (
+              {!isSsl && !isLinkScan && !isTracking && (
                 <>
                   <ConfigRow label="Expected status">
                     {monitor.expected_status_code ?? <span className="text-slate-500">200–399 (default)</span>}

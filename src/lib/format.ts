@@ -129,3 +129,17 @@ export function linkScanInfo(metadata: Record<string, unknown> | null | undefine
     broken,
   };
 }
+
+export interface TrackingInfo {
+  found: Record<string, string[]>;
+  expected: string[];
+  missing: string[];
+}
+
+/** Results of a tracking tag check from its latest check metadata. */
+export function trackingInfo(metadata: Record<string, unknown> | null | undefined): TrackingInfo | null {
+  if (!metadata || typeof metadata.tags_found !== "object" || metadata.tags_found === null) return null;
+  const found = metadata.tags_found as Record<string, string[]>;
+  const expected = Array.isArray(metadata.tags_expected) ? (metadata.tags_expected as string[]) : [];
+  return { found, expected, missing: expected.filter((t) => !found[t]) };
+}

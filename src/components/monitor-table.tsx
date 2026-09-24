@@ -3,12 +3,29 @@ import { RunCheckButton } from "@/components/run-check-button";
 import { HealthBadge } from "@/components/status";
 import { EmptyState, When, table } from "@/components/ui";
 import { getDataSource, type MonitorView } from "@/lib/data";
-import { certificateInfo, displayUrl, formatDate, formatUptime, linkScanInfo } from "@/lib/format";
+import { certificateInfo, displayUrl, formatDate, formatUptime, linkScanInfo, trackingInfo } from "@/lib/format";
+import { TRACKING_TAGS, isTrackingTag } from "@/lib/monitoring/tracking";
 import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS, countsTowardUptime, formatInterval } from "@/lib/labels";
 
 function LastResult({ view }: { view: MonitorView }) {
   const s = view.summary;
   if (!s?.last_status) return <span className="text-slate-400">No checks yet</span>;
+  const tags = view.monitor.monitor_type === "tracking_tags" ? trackingInfo(s.last_metadata) : null;
+  if (tags) {
+    const foundCount = Object.keys(tags.found).length;
+    return (
+      <div className="text-xs text-slate-600">
+        {foundCount} tag{foundCount === 1 ? "" : "s"} found
+        {tags.missing.length > 0 ? (
+          <div className="mt-0.5 text-red-700">
+            Missing: {tags.missing.map((t) => (isTrackingTag(t) ? TRACKING_TAGS[t].label : t)).join(", ")}
+          </div>
+        ) : (
+          tags.expected.length > 0 && <> · all {tags.expected.length} expected present</>
+        )}
+      </div>
+    );
+  }
   const scan = view.monitor.monitor_type === "broken_links" ? linkScanInfo(s.last_metadata) : null;
   if (scan) {
     return (
