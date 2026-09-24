@@ -3,7 +3,7 @@ import { RunCheckButton } from "@/components/run-check-button";
 import { HealthBadge } from "@/components/status";
 import { EmptyState, When, table } from "@/components/ui";
 import { getDataSource, type MonitorView } from "@/lib/data";
-import { displayUrl } from "@/lib/format";
+import { displayUrl, formatUptime } from "@/lib/format";
 import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS, formatInterval } from "@/lib/labels";
 
 function LastResult({ view }: { view: MonitorView }) {
@@ -40,6 +40,7 @@ export function MonitorTable({
             <th className={table.th}>Last result</th>
             <th className={table.th}>Last checked</th>
             <th className={table.th}>Last successful</th>
+            <th className={table.th}>Uptime 7d</th>
             <th className={table.th}>
               <span className="sr-only">Actions</span>
             </th>
@@ -94,6 +95,11 @@ export function MonitorTable({
                 </td>
                 <td className={table.td}>
                   <When iso={view.summary?.last_success_at} />
+                </td>
+                <td className={`${table.td} whitespace-nowrap`}>
+                  {formatUptime(view.uptime?.passed_7d ?? 0, view.uptime?.checks_7d ?? 0) ?? (
+                    <span className="text-slate-400">—</span>
+                  )}
                 </td>
                 <td className={`${table.td} text-right`}>
                   <RunCheckButton

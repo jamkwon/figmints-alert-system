@@ -3,7 +3,7 @@ import { RunCheckButton } from "@/components/run-check-button";
 import { CheckStatusBadge, HealthBadge, HealthDot, IncidentStatusBadge, TeamLabel } from "@/components/status";
 import { Panel, PageHeader, When, table } from "@/components/ui";
 import { getAppData, type ClientView, type IncidentView, type MonitorView } from "@/lib/data";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, formatUptime } from "@/lib/format";
 import { isActiveIncident, needsAttention, type Health } from "@/lib/health";
 import type { Severity } from "@/lib/types";
 
@@ -183,13 +183,28 @@ export default async function DashboardPage() {
   const otherClients = activeClients.filter((c) => !["critical", "warning", "healthy"].includes(c.health));
 
   const activeWebsites = activeClients.flatMap((c) => c.websites).filter((w) => w.website.active);
+  const runningMonitors = data.monitors.filter((m) => m.health !== "inactive");
+  const checks24h = runningMonitors.reduce((n, m) => n + (m.uptime?.checks_24h ?? 0), 0);
+  const uptime7d = formatUptime(
+    runningMonitors.reduce((n, m) => n + (m.uptime?.passed_7d ?? 0), 0),
+    runningMonitors.reduce((n, m) => n + (m.uptime?.checks_7d ?? 0), 0),
+  );
   const healthyWebsites = activeWebsites.filter((w) => w.health === "healthy");
 
   return (
     <>
       <PageHeader
         title="Dashboard"
-        description="What needs attention right now."
+        description={
+          <>
+            What needs attention right now.{" "}
+            <span className="text-slate-500">
+              Watching {runningMonitors.length} monitor{runningMonitors.length === 1 ? "" : "s"} on{" "}
+              {activeWebsites.length} website{activeWebsites.length === 1 ? "" : "s"} · {checks24h} checks in the last 24
+              hours{uptime7d && <> · {uptime7d} uptime over 7 days</>}
+            </span>
+          </>
+        }
         actions={<span className="text-xs text-slate-500">Updated {formatDateTime(data.loadedAt)}</span>}
       />
 
