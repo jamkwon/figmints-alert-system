@@ -36,6 +36,9 @@ export interface Website {
   url: string;
   environment: Environment;
   active: boolean;
+  /** While in the future, new incidents open as expected maintenance. */
+  maintenance_until: string | null;
+  maintenance_note: string;
   created_at: string;
   updated_at: string;
 }
@@ -95,8 +98,40 @@ export interface Incident {
   resolved_at: string | null;
   assigned_team: AssignedTeam;
   internal_notes: string;
+  /** Snoozed incidents reopen when this passes. */
+  snoozed_until: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type IncidentEventKind =
+  | "opened"
+  | "status_changed"
+  | "severity_changed"
+  | "assigned"
+  | "notes_updated"
+  | "resolved"
+  | "snooze_ended";
+
+export interface IncidentEvent {
+  id: string;
+  incident_id: string;
+  created_at: string;
+  /** Staff email, or "system" for the incident engine. */
+  actor: string;
+  kind: IncidentEventKind;
+  message: string;
+}
+
+/** Row of the monitor_uptime view. */
+export interface MonitorUptime {
+  monitor_id: string;
+  checks_24h: number;
+  passed_24h: number;
+  checks_7d: number;
+  passed_7d: number;
+  checks_30d: number;
+  passed_30d: number;
 }
 
 /** Everything the UI needs, loaded in one pass. */
@@ -106,4 +141,5 @@ export interface Snapshot {
   monitors: Monitor[];
   summaries: MonitorCheckSummary[];
   incidents: Incident[];
+  uptime: MonitorUptime[];
 }

@@ -7,9 +7,11 @@ import type {
   Client,
   Environment,
   Incident,
+  IncidentEvent,
   IncidentStatus,
   Monitor,
   MonitorCheckSummary,
+  MonitorUptime,
   MonitorType,
   Severity,
   Snapshot,
@@ -38,7 +40,23 @@ export function summarizeChecks(monitorId: string, checks: CheckResult[]): Monit
   };
 }
 
-export function buildSampleData(now: Date = new Date()): { snapshot: Snapshot; checkResults: CheckResult[] } {
+/** Same numbers as the monitor_uptime view. */
+export function computeUptime(monitorId: string, checks: CheckResult[], now: Date): MonitorUptime {
+  const since = (hours: number) => now.getTime() - hours * 3_600_000;
+  const own = checks.filter((c) => c.monitor_id === monitorId);
+  const window = (hours: number) => own.filter((c) => new Date(c.checked_at).getTime() > since(hours));
+  const count = (list: CheckResult[]) => [list.length, list.filter((c) => c.passed).length] as const;
+  const [checks_24h, passed_24h] = count(window(24));
+  const [checks_7d, passed_7d] = count(window(24 * 7));
+  const [checks_30d, passed_30d] = count(window(24 * 30));
+  return { monitor_id: monitorId, checks_24h, passed_24h, checks_7d, passed_7d, checks_30d, passed_30d };
+}
+
+export function buildSampleData(now: Date = new Date()): {
+  snapshot: Snapshot;
+  checkResults: CheckResult[];
+  events: IncidentEvent[];
+} {
   const ago = (minutes: number) => new Date(now.getTime() - minutes * 60_000).toISOString();
   const created = ago(60 * 24 * 90);
 
@@ -74,6 +92,8 @@ export function buildSampleData(now: Date = new Date()): { snapshot: Snapshot; c
     url,
     environment,
     active: true,
+    maintenance_until: null,
+    maintenance_note: "",
     created_at: created,
     updated_at: created,
   });
@@ -87,6 +107,9 @@ export function buildSampleData(now: Date = new Date()): { snapshot: Snapshot; c
     website(6, 5, "Main site", "https://coastalroofingpros.example", "production"),
     website(7, 6, "Main site", "https://mapleoaklaw.example", "production"),
   ];
+  // Staging is mid-rebuild: in a maintenance window for the next 2 days.
+  websites[4].maintenance_until = ago(-60 * 24 * 2);
+  websites[4].maintenance_note = "Planned rebuild";
 
   const monitors: Monitor[] = [];
   const checkResults: CheckResult[] = [];
@@ -236,6 +259,7 @@ export function buildSampleData(now: Date = new Date()): { snapshot: Snapshot; c
       resolved_at: resolvedMin === null ? null : ago(resolvedMin),
       assigned_team: team,
       internal_notes: notes,
+      snoozed_until: null,
       created_at: ago(firstMin),
       updated_at: ago(lastMin),
     };
@@ -266,5 +290,23 @@ export function buildSampleData(now: Date = new Date()): { snapshot: Snapshot; c
       "Page slug changed during a content update. Redirect added."),
   ];
 
-  return { snapshot: { clients, websites, monitors, summaries, incidents }, checkResults };
+  const uptime = monitors.map((m) => computeUptime(m.id, checkResults, now));
+
+  // A short history per incident: opened by the engine, plus a few staff actions.
+  const events: IncidentEvent[] = [];
+  const event = (incident: Incident, minAgo: number, actor: string, kind: IncidentEvent["kind"], message: string) =>
+    events.push({ id: `${incident.id}-e${events.length}`, incident_id: incident.id, created_at: ago(minAgo), actor, kind, message });
+  for (const i of incidents) {
+    const openedMin = (now.getTime() - new Date(i.first_detected_at).getTime()) / 60_000;
+    event(i, openedMin, "system", "opened", `Opened after 2 consecutive failed checks (${i.severity})`);
+  }
+  event(incidents[2], 40, "alex@figmints.com", "status_changed", "Marked Investigating");
+  event(incidents[2], 39, "alex@figmints.com", "assigned", "Assigned to Development");
+  event(incidents[2], 30, "alex@figmints.com", "notes_updated", "Updated internal notes");
+  event(incidents[3], 2800, "sam@figmints.com", "status_changed", "Marked Expected Maintenance");
+  event(incidents[4], 4320, "system", "resolved", "Resolved automatically after 2 successful checks");
+  event(incidents[5], 8595, "jordan@figmints.com", "resolved", "Resolved");
+  events.sort((a, b) => b.created_at.localeCompare(a.created_at));
+
+  return { snapshot: { clients, websites, monitors, summaries, incidents, uptime }, checkResults, events };
 }
