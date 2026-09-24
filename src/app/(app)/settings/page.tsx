@@ -2,12 +2,14 @@ import type { Metadata } from "next";
 import { connection } from "next/server";
 import { Fragment, type ReactNode } from "react";
 import { RunDueChecksButton } from "@/components/run-due-checks-button";
+import { TestAlertButton } from "@/components/test-alert-button";
 import { HealthBadge } from "@/components/status";
 import { Panel, PageHeader, When } from "@/components/ui";
 import { getDataSource, getSchedulerStatus } from "@/lib/data";
 import { APP_TIMEZONE } from "@/lib/format";
 import { allowedDomains } from "@/lib/auth/session";
 import { RETENTION_DAYS } from "@/lib/monitoring/scheduler";
+import { appUrl, slackWebhookUrl } from "@/lib/notify/send";
 import { supabaseEnvStatus } from "@/lib/supabase/server";
 
 export const metadata: Metadata = { title: "Settings" };
@@ -55,6 +57,8 @@ export default async function SettingsPage() {
   const cronSecretSet = (process.env.CRON_SECRET?.length ?? 0) >= 16;
 
   const { dueNow, nextDue, lastCheck } = await getSchedulerStatus();
+  const slackConfigured = slackWebhookUrl() !== null;
+  const alertLinkBase = appUrl();
 
   return (
     <>
@@ -109,6 +113,39 @@ export default async function SettingsPage() {
           <Row label="Check intervals">5 min, 15 min, 30 min, 1 hour, 6 hours, daily</Row>
           <Row label="Snooze options">1 hour, 4 hours, 24 hours, 7 days <span className="text-slate-500">(reopens automatically)</span></Row>
           <Row label="Check history kept">{RETENTION_DAYS} days <span className="text-slate-500">(older results are deleted hourly)</span></Row>
+        </dl>
+      </Panel>
+
+      <Panel title="Alerts" className="mt-6">
+        <dl>
+          <Row label="Slack">
+            {slackConfigured ? (
+              <HealthBadge health="healthy" label="Connected" />
+            ) : (
+              <span className="flex items-center gap-2">
+                <HealthBadge health="unknown" label="Not set up" />
+                <span className="text-xs text-slate-500">Set SLACK_WEBHOOK_URL (see README → Alerts).</span>
+              </span>
+            )}
+          </Row>
+          <Row label="What gets posted">
+            <strong>Critical</strong> incidents when they open, escalate from Warning, or come back from a snooze; and
+            their resolution.{" "}
+            <span className="text-slate-500">
+              Each incident alerts at most once. Warnings, maintenance, snoozed and ignored incidents stay on the
+              dashboard.
+            </span>
+          </Row>
+          <Row label="Links in alerts">
+            {alertLinkBase ?? <span className="text-slate-500">No link (set APP_URL)</span>}
+          </Row>
+          <Row label="Test">
+            <TestAlertButton
+              disabledReason={
+                source === "sample" ? "Connect Supabase first" : !slackConfigured ? "Set SLACK_WEBHOOK_URL first" : undefined
+              }
+            />
+          </Row>
         </dl>
       </Panel>
 
