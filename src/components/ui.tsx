@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { ReactNode } from "react";
 import { formatDateTime, formatFull, timeAgo } from "@/lib/format";
 
@@ -69,3 +70,19 @@ export const table = {
   row: "border-b border-slate-100 last:border-0 align-top hover:bg-fig-plum-mist",
   td: "px-4 py-3",
 };
+
+/** A link styled as a button, for page actions like "Add client". */
+export function LinkButton({ href, children, primary = false }: { href: string; children: ReactNode; primary?: boolean }) {
+  return (
+    <Link
+      href={href}
+      className={`rounded-md border px-3 py-1.5 text-sm font-medium whitespace-nowrap ${
+        primary
+          ? "border-fig-plum bg-fig-plum text-white hover:bg-fig-magenta"
+          : "border-slate-300 bg-white text-fig-ink hover:border-fig-plum hover:text-fig-plum"
+      }`}
+    >
+      {children}
+    </Link>
+  );
+}

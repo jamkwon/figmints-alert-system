@@ -1,0 +1,248 @@
+"use server";
+
+import { refresh } from "next/cache";
+import { redirect } from "next/navigation";
+import { isStaffRequest } from "@/lib/auth/session";
+import { MAINTENANCE_HOURS } from "@/lib/labels";
+import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
+import type { Monitor, Website } from "@/lib/types";
+import {
+  ValidationError,
+  parseBulkLines,
+  parseCheckbox,
+  parseEnvironment,
+  parseExpectedText,
+  parseInterval,
+  parseMonitorType,
+  parseName,
+  parseNotes,
+  parseOptionalInt,
+  parseSeverity,
+  parseUrl,
+  resolveMonitorUrl,
+  type BulkMonitorLine,
+} from "@/lib/validation";
+
+// Create/edit clients, websites and monitors. Every action checks the signed-in
+// user, validates on the server (URLs use the same SSRF rules as checks), and
+// only touches rows by ID.
+
+export interface FormState {
+  ok: boolean;
+  message?: string;
+  field?: string;
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function idFrom(formData: FormData, key: string): string | null {
+  const value = formData.get(key);
+  return typeof value === "string" && UUID.test(value) ? value : null;
+}
+
+/** Shared guard + error handling. `run` returns a path to redirect to on success. */
+async function handle(run: () => Promise<string>): Promise<FormState> {
+  if (!isSupabaseConfigured()) return { ok: false, message: "Connect Supabase to make changes." };
+  if (!(await isStaffRequest())) return { ok: false, message: "Your session has ended. Sign in again." };
+  let destination: string;
+  try {
+    destination = await run();
+  } catch (err) {
+    if (err instanceof ValidationError) return { ok: false, message: err.message, field: err.field };
+    return { ok: false, message: err instanceof Error ? err.message : "Something went wrong." };
+  }
+  redirect(destination);
+}
+
+function fail(action: string, error: { message: string } | null): asserts error is null {
+  if (error) throw new Error(`Could not ${action}: ${error.message}`);
+}
+
+async function insertMonitors(
+  websiteId: string,
+  lines: BulkMonitorLine[],
+  interval: number,
+  severity: Monitor["severity_on_failure"],
+) {
+  if (lines.length === 0) return;
+  const { error } = await getSupabase()
+    .from("monitors")
+    .insert(
+      lines.map((line) => ({
+        website_id: websiteId,
+        name: line.name,
+        monitor_type: line.expected_text ? "expected_content" : "http_status",
+        target_url: line.target_url,
+        expected_text: line.expected_text,
+        interval_minutes: interval,
+        severity_on_failure: severity,
+        // Due immediately: the next scheduler run checks it.
+        next_check_at: null,
+      })),
+    );
+  fail("add monitors", error);
+}
+
+// Clients ---------------------------------------------------------------------
+
+export async function saveClientAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return handle(async () => {
+    const id = idFrom(formData, "id");
+    const name = parseName(formData.get("name"));
+    const primaryWebsite = parseUrl(formData.get("primary_website"), "primary_website", false);
+    const notes = parseNotes(formData.get("notes"));
+    const db = getSupabase();
+
+    if (id) {
+      const { error } = await db
+        .from("clients")
+        .update({ name, primary_website: primaryWebsite, notes, active: parseCheckbox(formData.get("active")) })
+        .eq("id", id);
+      fail("save client", error);
+      return `/clients/${id}`;
+    }
+
+    // Parse everything before writing anything, so a bad line doesn't leave half a client.
+    const pages = primaryWebsite ? parseBulkLines(primaryWebsite, String(formData.get("pages") ?? "")) : [];
+    const interval = parseInterval(formData.get("interval_minutes") ?? 15);
+    const severity = parseSeverity(formData.get("severity_on_failure") ?? "critical");
+
+    const client = await db.from("clients").insert({ name, primary_website: primaryWebsite, notes }).select("id").single();
+    fail("create client", client.error);
+    if (primaryWebsite) {
+      const website = await db
+        .from("websites")
+        .insert({ client_id: client.data!.id, name: "Main site", url: primaryWebsite, environment: "production" })
+        .select("id")
+        .single();
+      fail("create website", website.error);
+      await insertMonitors(website.data!.id, pages, interval, severity);
+    }
+    return `/clients/${client.data!.id}`;
+  });
+}
+
+// Websites --------------------------------------------------------------------
+
+export async function saveWebsiteAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return handle(async () => {
+    const id = idFrom(formData, "id");
+    const clientId = idFrom(formData, "client_id");
+    if (!clientId) throw new Error("Unknown client.");
+    const fields = {
+      name: parseName(formData.get("name")),
+      url: parseUrl(formData.get("url"))!,
+      environment: parseEnvironment(formData.get("environment")),
+    };
+    const db = getSupabase();
+    if (id) {
+      const { error } = await db
+        .from("websites")
+        .update({ ...fields, active: parseCheckbox(formData.get("active")) })
+        .eq("id", id)
+        .eq("client_id", clientId);
+      fail("save website", error);
+    } else {
+      const { error } = await db.from("websites").insert({ ...fields, client_id: clientId });
+      fail("add website", error);
+    }
+    return `/clients/${clientId}`;
+  });
+}
+
+/** Starts (hours > 0) or ends (hours = 0) a maintenance window on a website. */
+export async function setMaintenanceAction(websiteId: string, hours: number, note: string): Promise<FormState> {
+  if (!isSupabaseConfigured()) return { ok: false, message: "Connect Supabase to make changes." };
+  if (!(await isStaffRequest())) return { ok: false, message: "Your session has ended. Sign in again." };
+  if (typeof websiteId !== "string" || !UUID.test(websiteId)) return { ok: false, message: "Unknown website." };
+  if (hours !== 0 && !MAINTENANCE_HOURS.includes(hours as (typeof MAINTENANCE_HOURS)[number])) {
+    return { ok: false, message: "Choose a maintenance length." };
+  }
+  let cleanNote: string;
+  try {
+    cleanNote = parseNotes(typeof note === "string" ? note : "", "maintenance_note");
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "Invalid note." };
+  }
+  const { error } = await getSupabase()
+    .from("websites")
+    .update({
+      maintenance_until: hours === 0 ? null : new Date(Date.now() + hours * 3_600_000).toISOString(),
+      maintenance_note: hours === 0 ? "" : cleanNote,
+    })
+    .eq("id", websiteId);
+  if (error) return { ok: false, message: `Could not update maintenance: ${error.message}` };
+  refresh();
+  return { ok: true, message: hours === 0 ? "Maintenance ended." : "Maintenance started." };
+}
+
+// Monitors --------------------------------------------------------------------
+
+async function loadWebsite(websiteId: string): Promise<Pick<Website, "id" | "url" | "client_id">> {
+  const { data, error } = await getSupabase()
+    .from("websites")
+    .select("id, url, client_id")
+    .eq("id", websiteId)
+    .maybeSingle();
+  fail("load website", error);
+  if (!data) throw new Error("Unknown website.");
+  return data;
+}
+
+/** Adds several monitors at once to one website (one page per line). */
+export async function addMonitorsAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return handle(async () => {
+    const websiteId = idFrom(formData, "website_id");
+    if (!websiteId) throw new ValidationError("website_id", "Choose a website.");
+    const website = await loadWebsite(websiteId);
+    const lines = parseBulkLines(website.url, String(formData.get("pages") ?? ""));
+    if (lines.length === 0) throw new ValidationError("pages", "Add at least one page.");
+    await insertMonitors(
+      website.id,
+      lines,
+      parseInterval(formData.get("interval_minutes")),
+      parseSeverity(formData.get("severity_on_failure")),
+    );
+    return `/clients/${website.client_id}`;
+  });
+}
+
+export async function saveMonitorAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return handle(async () => {
+    const id = idFrom(formData, "id");
+    if (!id) throw new Error("Unknown monitor.");
+    const db = getSupabase();
+    const existing = await db.from("monitors").select("website_id, active").eq("id", id).maybeSingle();
+    fail("load monitor", existing.error);
+    if (!existing.data) throw new Error("Unknown monitor.");
+    const website = await loadWebsite(existing.data.website_id);
+
+    const monitorType = parseMonitorType(formData.get("monitor_type"));
+    const expectedText = parseExpectedText(formData.get("expected_text"));
+    if (monitorType === "expected_content" && !expectedText) {
+      throw new ValidationError("expected_text", "Expected Content monitors need the text to look for.");
+    }
+    const active = parseCheckbox(formData.get("active"));
+    const { error } = await db
+      .from("monitors")
+      .update({
+        name: parseName(formData.get("name")),
+        monitor_type: monitorType,
+        target_url: resolveMonitorUrl(website.url, String(formData.get("target_url") ?? "")),
+        expected_status_code: parseOptionalInt(formData.get("expected_status_code"), "expected_status_code", "Expected status", 100, 599),
+        expected_text: expectedText,
+        max_response_time_ms:
+          monitorType === "response_time"
+            ? parseOptionalInt(formData.get("max_response_time_ms"), "max_response_time_ms", "Max response time", 100, 60000)
+            : null,
+        interval_minutes: parseInterval(formData.get("interval_minutes")),
+        severity_on_failure: parseSeverity(formData.get("severity_on_failure")),
+        active,
+        // Resuming a paused monitor makes it due right away.
+        ...(active && !existing.data.active ? { next_check_at: null } : {}),
+      })
+      .eq("id", id);
+    fail("save monitor", error);
+    return `/monitors/${id}`;
+  });
+}
