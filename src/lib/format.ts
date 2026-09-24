@@ -110,3 +110,22 @@ const dateOnly = new Intl.DateTimeFormat("en-US", {
 export function formatDate(iso: string): string {
   return dateOnly.format(new Date(iso));
 }
+
+export interface LinkScanInfo {
+  checked: number;
+  found: number;
+  unverified: number;
+  broken: { url: string; kind: string; text: string | null; reason: string }[];
+}
+
+/** Results of a broken link scan from its latest check metadata. */
+export function linkScanInfo(metadata: Record<string, unknown> | null | undefined): LinkScanInfo | null {
+  if (!metadata || typeof metadata.links_checked !== "number") return null;
+  const broken = Array.isArray(metadata.broken_links) ? (metadata.broken_links as LinkScanInfo["broken"]) : [];
+  return {
+    checked: metadata.links_checked,
+    found: typeof metadata.links_found === "number" ? metadata.links_found : metadata.links_checked,
+    unverified: typeof metadata.links_unverified === "number" ? metadata.links_unverified : 0,
+    broken,
+  };
+}

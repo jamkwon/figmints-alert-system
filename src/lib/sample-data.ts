@@ -233,6 +233,26 @@ export function buildSampleData(now: Date = new Date()): {
     { interval: 360, severity: "critical", passingLatestMin: 400,
       failures: fails("warning", 0, "SSL certificate expires in 12 days", [[40, 140]]) });
 
+  monitor(16, 4, "Broken Links (Homepage)", "broken_links", "https://summitridgeacademy.example/",
+    { interval: 1440, severity: "warning", passingLatestMin: 1500,
+      failures: fails("warning", 200, "2 broken links of 40 checked: /tuition-2024 (HTTP 404), /img/campus-map.pdf (HTTP 404)", [[60, 14200]]) });
+
+  // Link scans record what they checked and what was broken.
+  for (const check of checkResults) {
+    if (check.monitor_id !== mid(16)) continue;
+    check.metadata = {
+      links_found: 58,
+      links_checked: 40,
+      links_unverified: 1,
+      broken_links: check.passed
+        ? []
+        : [
+            { url: "https://summitridgeacademy.example/tuition-2024", kind: "link", text: "2024 Tuition", reason: "HTTP 404" },
+            { url: "https://summitridgeacademy.example/img/campus-map.pdf", kind: "link", text: "Campus map", reason: "HTTP 404" },
+          ],
+    };
+  }
+
   // SSL checks carry the certificate's expiry instead of an HTTP status.
   const certExpiry: Record<string, number> = { [mid(14)]: 83, [mid(15)]: 12 };
   for (const check of checkResults) {

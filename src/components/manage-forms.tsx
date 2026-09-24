@@ -88,6 +88,7 @@ export function ClientForm({ client }: { client?: Client }) {
             </Field>
           </div>
           <Checkbox name="ssl" label="Also check the SSL certificate (warns 14 days before it expires)" defaultChecked />
+          <Checkbox name="links" label="Also scan the homepage for broken links (daily)" defaultChecked />
           <p className="text-xs text-slate-500">Leave Pages empty to add monitors later. New monitors are checked within 5 minutes.</p>
         </fieldset>
       )}
@@ -166,6 +167,7 @@ export function AddMonitorsForm({
         </Field>
       </div>
       <Checkbox name="ssl" label="Also check the SSL certificate (skipped if this website already has one)" />
+      <Checkbox name="links" label="Also scan the homepage for broken links, daily (skipped if it already has a scan)" />
       <p className="text-xs text-slate-500">
         Names come from the page path (you can rename them after). New monitors are checked within 5 minutes.
       </p>
@@ -190,7 +192,7 @@ export function MonitorForm({ monitor }: { monitor: Monitor }) {
       <div className="grid grid-cols-2 gap-3">
         <Field
           label="Type"
-          hint="SSL Certificate checks only the certificate; the page fields below are ignored."
+          hint="SSL Certificate and Broken Links have their own rules; expected status and text are ignored."
           error={fieldError(state, "monitor_type")}
         >
           <select name="monitor_type" defaultValue={monitor.monitor_type} className={inputClass}>

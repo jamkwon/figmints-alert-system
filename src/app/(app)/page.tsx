@@ -4,8 +4,12 @@ import { CheckStatusBadge, HealthBadge, HealthDot, IncidentStatusBadge, TeamLabe
 import { Panel, PageHeader, When, table } from "@/components/ui";
 import { getAppData, type ClientView, type IncidentView, type MonitorView } from "@/lib/data";
 import { formatDateTime, formatUptime } from "@/lib/format";
+import { countsTowardUptime } from "@/lib/labels";
 import { isActiveIncident, needsAttention, type Health } from "@/lib/health";
 import type { Severity } from "@/lib/types";
+
+// Run check can start a broken link scan, which takes up to ~40 seconds.
+export const maxDuration = 60;
 
 const STAT_ACCENT: Partial<Record<Health, string>> = {
   critical: "border-t-fig-coral",
@@ -185,7 +189,7 @@ export default async function DashboardPage() {
   const activeWebsites = activeClients.flatMap((c) => c.websites).filter((w) => w.website.active);
   const runningMonitors = data.monitors.filter((m) => m.health !== "inactive");
   const checks24h = runningMonitors.reduce((n, m) => n + (m.uptime?.checks_24h ?? 0), 0);
-  const availability = runningMonitors.filter((m) => m.monitor.monitor_type !== "ssl_expiry");
+  const availability = runningMonitors.filter((m) => countsTowardUptime(m.monitor.monitor_type));
   const uptime7d = formatUptime(
     availability.reduce((n, m) => n + (m.uptime?.passed_7d ?? 0), 0),
     availability.reduce((n, m) => n + (m.uptime?.checks_7d ?? 0), 0),

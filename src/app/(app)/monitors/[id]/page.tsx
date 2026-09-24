@@ -10,6 +10,7 @@ import { getAppData, getCheckHistory, type MonitorView } from "@/lib/data";
 import {
   certificateInfo,
   displayUrl,
+  linkScanInfo,
   formatDate,
   formatDateTime,
   formatUptime,
@@ -19,6 +20,9 @@ import {
 import { failingSince } from "@/lib/health";
 import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS, SEVERITY_LABELS, formatInterval } from "@/lib/labels";
 import { DEFAULT_MAX_RESPONSE_TIME_MS, SSL_FAILURE_DAYS, SSL_WARNING_DAYS } from "@/lib/monitoring/evaluate";
+
+// Run check can start a broken link scan, which takes up to ~40 seconds.
+export const maxDuration = 60;
 
 const HISTORY_LIMIT = 50;
 
@@ -56,7 +60,9 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
 
   const { monitor, website, client, summary, health, activeIncident, uptime } = view;
   const isSsl = monitor.monitor_type === "ssl_expiry";
+  const isLinkScan = monitor.monitor_type === "broken_links";
   const cert = isSsl ? certificateInfo(summary?.last_metadata) : null;
+  const scan = isLinkScan ? linkScanInfo(summary?.last_metadata) : null;
   const uptimeRows = [
     { label: "Last 24 hours", passed: uptime?.passed_24h ?? 0, checks: uptime?.checks_24h ?? 0 },
     { label: "Last 7 days", passed: uptime?.passed_7d ?? 0, checks: uptime?.checks_7d ?? 0 },
@@ -155,7 +161,35 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
         </Panel>
 
         <div className="space-y-6">
-          {isSsl ? (
+          {isLinkScan ? (
+            <Panel title="Broken links" aside={scan ? `${scan.checked} of ${scan.found} checked` : undefined}>
+              {!scan ? (
+                <p className="px-4 py-4 text-sm text-slate-500">Not scanned yet.</p>
+              ) : scan.broken.length === 0 ? (
+                <p className="px-4 py-4 text-sm text-fig-teal">No broken links found in the last scan.</p>
+              ) : (
+                <ul className="divide-y divide-slate-100">
+                  {scan.broken.map((b) => (
+                    <li key={b.url} className="px-4 py-2.5 text-sm">
+                      <a href={b.url} target="_blank" rel="noopener noreferrer" className="break-all text-fig-plum hover:underline">
+                        {b.url.replace(/^https?:\/\//, "")}
+                      </a>
+                      <div className="text-xs text-slate-500">
+                        <span className="text-red-700">{b.reason}</span> · {b.kind}
+                        {b.text && <> · &ldquo;{b.text}&rdquo;</>}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {scan && scan.unverified > 0 && (
+                <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-500">
+                  {scan.unverified} link{scan.unverified === 1 ? "" : "s"} couldn&apos;t be verified (blocked, rate-limited or
+                  slow). Those aren&apos;t counted as broken.
+                </p>
+              )}
+            </Panel>
+          ) : isSsl ? (
             <Panel title="Certificate">
               <dl>
                 <ConfigRow label="Expires">
@@ -201,7 +235,7 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
               <ConfigRow label="Website">
                 {displayUrl(website.url)} · {ENVIRONMENT_LABELS[website.environment]}
               </ConfigRow>
-              {!isSsl && (
+              {!isSsl && !isLinkScan && (
                 <>
                   <ConfigRow label="Expected status">
                     {monitor.expected_status_code ?? <span className="text-slate-500">200–399 (default)</span>}

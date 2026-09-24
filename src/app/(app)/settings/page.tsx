@@ -9,6 +9,7 @@ import { getDataSource, getSchedulerStatus } from "@/lib/data";
 import { APP_TIMEZONE } from "@/lib/format";
 import { allowedDomains } from "@/lib/auth/session";
 import { SSL_FAILURE_DAYS, SSL_WARNING_DAYS } from "@/lib/monitoring/evaluate";
+import { MAX_LINKS } from "@/lib/monitoring/links";
 import { RETENTION_DAYS } from "@/lib/monitoring/scheduler";
 import { appUrl, slackWebhookUrl } from "@/lib/notify/send";
 import { supabaseEnvStatus } from "@/lib/supabase/server";
@@ -115,6 +116,11 @@ export default async function SettingsPage() {
           <Row label="SSL certificates">
             Warning at {SSL_WARNING_DAYS} days left; failed at {SSL_FAILURE_DAYS} days, or when expired, untrusted or for
             the wrong domain
+          </Row>
+          <Row label="Broken link scans">
+            Up to {MAX_LINKS} links per page (same-site first), daily by default. Broken = 404, 410, 5xx, unknown domain
+            or refused connection; anything that just blocks or rate-limits checkers is ignored. Found broken links raise
+            a Warning.
           </Row>
           <Row label="Snooze options">1 hour, 4 hours, 24 hours, 7 days <span className="text-slate-500">(reopens automatically)</span></Row>
           <Row label="Check history kept">{RETENTION_DAYS} days <span className="text-slate-500">(older results are deleted hourly)</span></Row>

@@ -72,7 +72,8 @@ const CHECK_STATUS_DISPLAY: Record<CheckStatus, { health: Health; label: string 
 /** Result of a single check run. A warning means "slow" for pages, "expiring soon" for certificates. */
 export function CheckStatusBadge({ status, monitorType }: { status: CheckStatus; monitorType?: MonitorType }) {
   const { health, label } = CHECK_STATUS_DISPLAY[status];
-  return <HealthBadge health={health} label={status === "warning" && monitorType === "ssl_expiry" ? "Expiring soon" : label} />;
+  const warningLabel = monitorType === "ssl_expiry" ? "Expiring soon" : monitorType === "broken_links" ? "Broken links" : label;
+  return <HealthBadge health={health} label={status === "warning" ? warningLabel : label} />;
 }
 
 const INCIDENT_STATUS_STYLES: Record<IncidentStatus, string> = {

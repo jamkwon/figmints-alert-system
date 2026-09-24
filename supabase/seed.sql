@@ -160,3 +160,18 @@ from (values
   ('33333333-3333-4333-8333-000000000015', 'warning', 40, false, 'SSL certificate expires in 12 days', 12),
   ('33333333-3333-4333-8333-000000000015', 'passed', 400, true, null, 12)
 ) as v(monitor_id, status, min_ago, passed, error_message, days_from_now);
+
+-- Broken link scan (Phase 8): Summit Ridge's homepage has 2 broken links.
+insert into public.monitors (id, website_id, name, monitor_type, target_url, interval_minutes, severity_on_failure, last_checked_at, next_check_at)
+values ('33333333-3333-4333-8333-000000000016', '22222222-2222-4222-8222-000000000004', 'Broken Links (Homepage)', 'broken_links',
+        'https://summitridgeacademy.example/', 1440, 'warning', now() - interval '60 minutes', now() + interval '1380 minutes');
+
+insert into public.check_results (monitor_id, status, checked_at, http_status, response_time_ms, passed, error_message, metadata)
+values
+  ('33333333-3333-4333-8333-000000000016', 'passed', now() - interval '1500 minutes', 200, 13800, true, null,
+   '{"links_found": 58, "links_checked": 40, "links_unverified": 1, "broken_links": []}'),
+  ('33333333-3333-4333-8333-000000000016', 'warning', now() - interval '60 minutes', 200, 14200, false,
+   '2 broken links of 40 checked: /tuition-2024 (HTTP 404), /img/campus-map.pdf (HTTP 404)',
+   '{"links_found": 58, "links_checked": 40, "links_unverified": 1, "broken_links": [
+      {"url": "https://summitridgeacademy.example/tuition-2024", "kind": "link", "text": "2024 Tuition", "reason": "HTTP 404"},
+      {"url": "https://summitridgeacademy.example/img/campus-map.pdf", "kind": "link", "text": "Campus map", "reason": "HTTP 404"}]}');

@@ -4,6 +4,9 @@ import { Panel, PageHeader } from "@/components/ui";
 import { getAppData } from "@/lib/data";
 import { compareHealth } from "@/lib/health";
 
+// Run check can start a broken link scan, which takes up to ~40 seconds.
+export const maxDuration = 60;
+
 export const metadata: Metadata = { title: "Checks" };
 
 export default async function ChecksPage() {
