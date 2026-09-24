@@ -15,6 +15,7 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 - **Phase 5 (operational improvements): done.** Add/edit clients, websites and monitors in the app (with bulk monitor setup), filters, timed snooze, website maintenance windows, uptime percentages, incident history, and automatic check-history cleanup.
 - **Phase 9 (alerts): Slack done.** Critical incidents are posted to a Slack channel when they open and when they resolve. See **Alerts**. Email and Basecamp aren't built yet.
 - **Phase 8 (advanced monitoring): SSL certificate expiry done.** An *SSL Certificate* monitor warns before a site's certificate expires. See **SSL certificates**.
+- **Phase 8: broken link scans done.** A *Broken Links* monitor scans a page's links, images, stylesheets and scripts. See **Broken link scans**.
 
 Running checks and updating incidents require Supabase. On sample data those controls are disabled.
 
@@ -86,6 +87,7 @@ The schema lives in `supabase/migrations/`. Sample data lives in `supabase/seed.
    - `20260925000000_operations.sql` (Phase 5)
    - `20260926000000_alerts.sql` (Phase 9)
    - `20260927000000_ssl_expiry.sql` (Phase 8, SSL)
+   - `20260928000000_broken_links.sql` (Phase 8, broken links)
 3. (Optional) Run `supabase/seed.sql` to load the 6 sample clients. You can re-run it safely; it replaces the earlier sample rows.
 4. Copy the project URL and the secret key into `.env.local`, then restart `npm run dev`.
 
@@ -125,7 +127,7 @@ Row-level security is enabled on every table with **no policies**. The public an
 | `npm start` | Serve the production build |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | Generate route types and run `tsc` |
-| `npm test` | Unit tests for health rules, check evaluation (HTTP and SSL), incident rules, alert rules, login rules, form validation and SSRF protection (Node's built-in test runner) |
+| `npm test` | Unit tests for health rules, check evaluation (HTTP, SSL, broken links), incident rules, alert rules, login rules, form validation and SSRF protection (Node's built-in test runner) |
 
 ## Project layout
 
@@ -147,7 +149,8 @@ src/
     notify/             Alerts: rules and Slack message format (alerts.ts), sending (send.ts)
     monitoring/
       run-check.ts      Performs one HTTP check (redirects, timeout, body limit, error messages)
-      evaluate.ts       Pure pass/fail rules for a check
+      evaluate.ts       Pure pass/fail rules for a check (HTTP and SSL)
+      links.ts          Broken link scans: which links to check, what counts as broken
       url-safety.ts     SSRF protection
       incident-engine.ts Pure rules: when to open, update or resolve an incident
       record.ts         Runs a check, saves the result, applies incident rules
@@ -170,6 +173,7 @@ Each check makes one `GET` request to the monitor's target URL and stores the re
 | HTTP Status | Status is 200–399, or exactly the monitor's *expected status* if one is set | Failed |
 | Expected Content | Status passes **and** the expected text appears in the page's visible text | Failed |
 | Response Time | Status passes **and** the full response takes no longer than *max response time* (default 3000 ms) | Warning (slow) |
+| Broken Links | The page loads and none of its first 40 links/images/stylesheets/scripts are broken | Warning when any are broken; Failed only if the page itself doesn't load |
 | SSL Certificate | The certificate is trusted, matches the domain, and has more than 14 days left | Warning at 14 days or less; Failed at 3 days or less, or when expired, untrusted or for the wrong domain |
 
 Any monitor with *expected text* set also checks the text, whatever its type.
@@ -214,6 +218,20 @@ An **SSL Certificate** monitor opens a secure connection to the website (port 44
 - **Where you see it:** the expiry date and days left appear in monitor tables and on the monitor page, along with the issuer.
 - **Uptime:** SSL monitors don't count toward uptime, because an expiring certificate isn't downtime.
 - **Safety:** the connection uses the same SSRF protection as page checks.
+
+### Broken link scans
+
+A **Broken Links** monitor loads a page and checks what it links to: links, images, stylesheets and scripts.
+
+- **Adding one:** tick **Also scan the homepage for broken links** on **Add client** or **Add monitors**. It scans the homepage daily, one scan per website. To scan another page, **Edit monitor** and change the URL, or add another monitor with type *Broken Links*.
+- **How much it checks:** up to **40** links per scan, same-site links first. It sends a `HEAD` request, falling back to `GET` if the server rejects `HEAD`, with an 8-second limit per link.
+- **Gentle on the client's server:** at most 2 requests at a time go to the site itself, and up to 6 at a time to other sites. A typical scan takes about 15 seconds.
+- **What counts as broken:** HTTP 404, 410, 5xx, an unknown domain, a refused connection, or an SSL error.
+- **What doesn't:** 401/403 (login or bot blocking), 429 (rate limiting), LinkedIn's 999, and timeouts are counted as "couldn't verify". They never raise a problem, so they don't cause false alarms.
+- **Result:** any broken link makes the check a **Warning**, and 2 scans in a row open a Warning incident. That never posts to Slack.
+- **Where you see it:** the monitor page lists each broken link with its status and link text. Tables show "40 links checked · 2 broken".
+- **Uptime:** link scans don't count toward uptime.
+- **Safety:** every request uses the same SSRF protection as page checks. Links to private addresses are skipped, not fetched.
 
 ### Maintenance windows
 
