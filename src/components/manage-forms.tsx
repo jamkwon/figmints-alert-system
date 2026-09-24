@@ -3,6 +3,7 @@
 import { useActionState, useState } from "react";
 import {
   addMonitorsAction,
+  createMonitorAction,
   saveClientAction,
   saveMonitorAction,
   saveWebsiteAction,
@@ -19,6 +20,7 @@ import {
   SEVERITY_LABELS,
   formatInterval,
 } from "@/lib/labels";
+import { TRACKING_TAGS, TRACKING_TAG_KEYS } from "@/lib/monitoring/tracking";
 import type { Client, Monitor, MonitorType, Website } from "@/lib/types";
 
 const initial: FormState = { ok: true };
@@ -102,6 +104,7 @@ export function ClientForm({ client }: { client?: Client }) {
           </div>
           <Checkbox name="ssl" label="Also check the SSL certificate (warns 14 days before it expires)" defaultChecked />
           <Checkbox name="links" label="Also scan the homepage for broken links (daily)" defaultChecked />
+          <Checkbox name="tags" label="Also watch the homepage's tracking tags (expects the ones found now)" defaultChecked />
           <p className="text-xs text-slate-500">Leave Pages empty to add monitors later. New monitors are checked within 5 minutes.</p>
         </fieldset>
       )}
@@ -189,10 +192,14 @@ export function AddMonitorsForm({
       </div>
       <Checkbox name="ssl" label="Also check the SSL certificate (skipped if this website already has one)" />
       <Checkbox name="links" label="Also scan the homepage for broken links, daily (skipped if it already has a scan)" />
+      <Checkbox
+        name="tags"
+        label="Also watch the homepage's tracking tags, expecting the ones found now (skipped if it already has one)"
+      />
       <p className="text-xs text-slate-500">
         {hasPages
           ? "Names come from the page path (you can rename them after). New monitors are checked within 5 minutes."
-          : "No pages listed: only the ticked extra checks are added (SSL every 6 hours, link scan daily)."}
+          : "No pages listed: only the ticked extra checks are added (SSL and tags every 6 hours, link scan daily)."}
       </p>
       <FormActions label="Add monitors" cancelHref={`/clients/${clientId}`} />
     </form>
@@ -207,33 +214,86 @@ const TYPE_HELP: Record<MonitorType, string> = {
     "Checks the site's certificate: warning at 14 days left; failed at 3 days, or when expired or untrusted. Only the domain of the URL is used.",
   broken_links:
     "Checks up to 40 links, images and files on this page. Broken links raise a Warning.",
+  tracking_tags:
+    "Fails when any chosen tag is missing from the page's HTML (e.g. removed by a theme or plugin update).",
 };
 
 const SEVERITY_HELP: Partial<Record<MonitorType, string>> = {
   response_time: "Slow responses are always a Warning; this applies when the page fails.",
   ssl_expiry: "Expiring soon is always a Warning; this applies when the certificate fails.",
   broken_links: "Broken links are always a Warning; this applies if the page itself fails to load.",
+  tracking_tags: "Choose Critical to get a Slack alert when a tag goes missing.",
 };
 
 const INTERVAL_HINT: Partial<Record<MonitorType, string>> = {
   ssl_expiry: "Every 6 hours is plenty for certificates.",
   broken_links: "Daily keeps scans polite (each scan makes up to 40 requests).",
+  tracking_tags: "Every 6 hours catches a removed tag the same day.",
 };
 
-export function MonitorForm({ monitor }: { monitor: Monitor }) {
-  const [state, action] = useActionState(saveMonitorAction, initial);
-  const [type, setType] = useState<MonitorType>(monitor.monitor_type);
-  const fields = ["name", "monitor_type", "target_url", "expected_status_code", "expected_text", "max_response_time_ms"];
+/** Defaults for a brand-new monitor. */
+const NEW_MONITOR = {
+  name: "",
+  monitor_type: "http_status" as MonitorType,
+  target_url: "/",
+  expected_status_code: null,
+  expected_text: null,
+  expected_tags: [] as string[],
+  max_response_time_ms: null,
+  interval_minutes: 15,
+  severity_on_failure: "critical",
+  active: true,
+};
+
+/**
+ * Edit an existing monitor, or create one with all settings when `websites` is
+ * given (then `monitor` is omitted and a website picker is shown).
+ */
+export function MonitorForm({
+  monitor,
+  create,
+}: {
+  monitor?: Monitor;
+  create?: { clientId: string; websites: Website[]; defaultWebsiteId?: string };
+}) {
+  const [state, action] = useActionState(create ? createMonitorAction : saveMonitorAction, initial);
+  const values = monitor ?? NEW_MONITOR;
+  const [type, setType] = useState<MonitorType>(values.monitor_type);
+  const fields = [
+    "name",
+    "monitor_type",
+    "target_url",
+    "expected_status_code",
+    "expected_text",
+    "max_response_time_ms",
+    "expected_tags",
+    "website_id",
+  ];
   // SSL and link scans have their own pass/fail rules, so page settings don't apply.
-  const pageCheck = type !== "ssl_expiry" && type !== "broken_links";
+  const pageCheck = type !== "ssl_expiry" && type !== "broken_links" && type !== "tracking_tags";
   // Hidden fields stay in the form (so values survive switching type); the server ignores them.
   const show = (visible: boolean) => (visible ? undefined : "hidden");
   return (
     <form action={action} className="space-y-4">
-      <input type="hidden" name="id" value={monitor.id} />
+      {monitor && <input type="hidden" name="id" value={monitor.id} />}
       <FormError state={state} fields={fields} />
-      <Field label="Name" error={fieldError(state, "name")}>
-        <input name="name" required maxLength={120} defaultValue={monitor.name} className={inputClass} />
+      {create && (
+        <Field label="Website" error={fieldError(state, "website_id")}>
+          <select name="website_id" defaultValue={create.defaultWebsiteId ?? create.websites[0]?.id} className={inputClass}>
+            {create.websites.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name} · {w.url} ({ENVIRONMENT_LABELS[w.environment]})
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+      <Field
+        label={create ? "Name (optional)" : "Name"}
+        hint={create ? "Leave blank to name it after the page, e.g. \"Contact Page\"." : undefined}
+        error={fieldError(state, "name")}
+      >
+        <input name="name" required={!create} maxLength={120} defaultValue={values.name} className={inputClass} />
       </Field>
       <Field label="Type" hint={TYPE_HELP[type]} error={fieldError(state, "monitor_type")}>
         <select
@@ -258,7 +318,7 @@ export function MonitorForm({ monitor }: { monitor: Monitor }) {
         }
         error={fieldError(state, "target_url")}
       >
-        <input name="target_url" required defaultValue={monitor.target_url} className={inputClass} />
+        <input name="target_url" required defaultValue={values.target_url} className={inputClass} />
       </Field>
       <div className={show(pageCheck)}>
         {/* Two columns only when Max response time is shown; otherwise Expected status takes the full width. */}
@@ -267,7 +327,7 @@ export function MonitorForm({ monitor }: { monitor: Monitor }) {
             <input
               name="expected_status_code"
               inputMode="numeric"
-              defaultValue={monitor.expected_status_code ?? ""}
+              defaultValue={values.expected_status_code ?? ""}
               className={inputClass}
             />
           </Field>
@@ -276,7 +336,7 @@ export function MonitorForm({ monitor }: { monitor: Monitor }) {
               <input
                 name="max_response_time_ms"
                 inputMode="numeric"
-                defaultValue={monitor.max_response_time_ms ?? ""}
+                defaultValue={values.max_response_time_ms ?? ""}
                 className={inputClass}
               />
             </Field>
@@ -297,21 +357,48 @@ export function MonitorForm({ monitor }: { monitor: Monitor }) {
             name="expected_text"
             maxLength={500}
             required={type === "expected_content"}
-            defaultValue={monitor.expected_text ?? ""}
+            defaultValue={values.expected_text ?? ""}
             className={inputClass}
           />
         </Field>
       </div>
+      <div className={show(type === "tracking_tags")}>
+        <fieldset className="rounded-md border border-slate-200 p-4">
+          <legend className="px-1 text-sm font-medium text-fig-ink">Tags that must be on the page</legend>
+          <div className="grid grid-cols-2 gap-2">
+            {TRACKING_TAG_KEYS.map((tag) => (
+              <Checkbox
+                key={tag}
+                name="expected_tags"
+                value={tag}
+                label={TRACKING_TAGS[tag].label}
+                defaultChecked={values.expected_tags.includes(tag)}
+              />
+            ))}
+          </div>
+          {fieldError(state, "expected_tags") ? (
+            <p className="mt-2 text-xs text-red-700">{fieldError(state, "expected_tags")}</p>
+          ) : (
+            <p className="mt-2 text-xs text-slate-500">
+              Tags loaded through Google Tag Manager (e.g. GA4 set up inside GTM) aren&apos;t in the page&apos;s HTML. For
+              those sites, expect Google Tag Manager itself.
+            </p>
+          )}
+        </fieldset>
+      </div>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Check" hint={INTERVAL_HINT[type]}>
-          <IntervalSelect defaultValue={monitor.interval_minutes} />
+          <IntervalSelect defaultValue={values.interval_minutes} />
         </Field>
         <Field label="Severity when failing" hint={SEVERITY_HELP[type]}>
-          <SeveritySelect defaultValue={monitor.severity_on_failure} />
+          <SeveritySelect defaultValue={values.severity_on_failure} />
         </Field>
       </div>
-      <Checkbox name="active" label="Active (uncheck to pause this monitor)" defaultChecked={monitor.active} />
-      <FormActions label="Save monitor" cancelHref={`/monitors/${monitor.id}`} />
+      <Checkbox name="active" label="Active (uncheck to pause this monitor)" defaultChecked={values.active} />
+      <FormActions
+        label={create ? "Add monitor" : "Save monitor"}
+        cancelHref={create ? `/clients/${create.clientId}` : `/monitors/${monitor!.id}`}
+      />
     </form>
   );
 }

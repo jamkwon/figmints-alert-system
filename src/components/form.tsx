@@ -32,10 +32,27 @@ export function Field({
   );
 }
 
-export function Checkbox({ name, label, defaultChecked }: { name: string; label: string; defaultChecked?: boolean }) {
+export function Checkbox({
+  name,
+  label,
+  defaultChecked,
+  value,
+}: {
+  name: string;
+  label: string;
+  defaultChecked?: boolean;
+  /** For checkbox groups sharing a name. */
+  value?: string;
+}) {
   return (
     <label className="flex items-center gap-2 text-sm text-fig-ink">
-      <input type="checkbox" name={name} defaultChecked={defaultChecked} className="size-4 accent-fig-plum" />
+      <input
+        type="checkbox"
+        name={name}
+        value={value}
+        defaultChecked={defaultChecked}
+        className="size-4 accent-fig-plum"
+      />
       {label}
     </label>
   );

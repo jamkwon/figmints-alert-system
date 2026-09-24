@@ -108,3 +108,11 @@ test("SSL monitors get certificate-specific titles", () => {
   assert.equal(crit.kind === "open" && crit.incident.title, "SSL certificate problem on Homepage");
   assert.equal(crit.kind === "open" && crit.incident.severity, "critical");
 });
+
+test("tracking tag monitors get a tracking-specific title", () => {
+  const tags = { name: "Homepage", severity_on_failure: "warning" as const, monitor_type: "tracking_tags" as const };
+  const missing: Check = { status: "failed", passed: false, checked_at: "t2", http_status: 200, error_message: "Missing tracking: Meta Pixel" };
+  const decision = decideIncident(tags, [missing, { ...missing, checked_at: "t1" }], undefined);
+  assert.equal(decision.kind === "open" && decision.incident.title, "Tracking tags missing on Homepage");
+  assert.equal(decision.kind === "open" && decision.incident.severity, "warning");
+});

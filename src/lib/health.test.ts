@@ -12,6 +12,7 @@ const monitor: Monitor = {
   expected_status_code: null,
   expected_text: null,
   max_response_time_ms: null,
+  expected_tags: [],
   interval_minutes: 5,
   severity_on_failure: "critical",
   active: true,

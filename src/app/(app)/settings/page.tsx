@@ -117,6 +117,10 @@ export default async function SettingsPage() {
             Warning at {SSL_WARNING_DAYS} days left; failed at {SSL_FAILURE_DAYS} days, or when expired, untrusted or for
             the wrong domain
           </Row>
+          <Row label="Tracking tags">
+            Looks for Google Tag Manager, GA4, Google Ads, Meta Pixel, LinkedIn Insight and HubSpot in the page&apos;s HTML;
+            fails when an expected tag is missing. Tags loaded inside GTM aren&apos;t visible without a browser.
+          </Row>
           <Row label="Broken link scans">
             Up to {MAX_LINKS} links per page (same-site first), daily by default. Broken = 404, 410, 5xx, unknown domain
             or refused connection; anything that just blocks or rate-limits checkers is ignored. Found broken links raise

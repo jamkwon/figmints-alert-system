@@ -175,3 +175,16 @@ values
    '{"links_found": 58, "links_checked": 40, "links_unverified": 1, "broken_links": [
       {"url": "https://summitridgeacademy.example/tuition-2024", "kind": "link", "text": "2024 Tuition", "reason": "HTTP 404"},
       {"url": "https://summitridgeacademy.example/img/campus-map.pdf", "kind": "link", "text": "Campus map", "reason": "HTTP 404"}]}');
+
+-- Tracking tags (Phase 8): Harborview's homepage lost its Meta Pixel.
+insert into public.monitors (id, website_id, name, monitor_type, target_url, expected_tags, interval_minutes, severity_on_failure, last_checked_at, next_check_at)
+values ('33333333-3333-4333-8333-000000000017', '22222222-2222-4222-8222-000000000001', 'Tracking Tags (Homepage)', 'tracking_tags',
+        'https://harborviewdental.example/', array['gtm', 'ga4', 'meta_pixel'], 360, 'warning',
+        now() - interval '50 minutes', now() + interval '310 minutes');
+
+insert into public.check_results (monitor_id, status, checked_at, http_status, response_time_ms, passed, error_message, metadata)
+values
+  ('33333333-3333-4333-8333-000000000017', 'passed', now() - interval '400 minutes', 200, 880, true, null,
+   '{"tags_expected": ["gtm", "ga4", "meta_pixel"], "tags_found": {"gtm": ["GTM-HVD2024"], "ga4": ["G-HVD8K2L1Q"], "meta_pixel": ["1122334455667788"]}}'),
+  ('33333333-3333-4333-8333-000000000017', 'failed', now() - interval '50 minutes', 200, 900, false, 'Missing tracking: Meta Pixel',
+   '{"tags_expected": ["gtm", "ga4", "meta_pixel"], "tags_found": {"gtm": ["GTM-HVD2024"], "ga4": ["G-HVD8K2L1Q"]}}');

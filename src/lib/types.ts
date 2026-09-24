@@ -1,7 +1,13 @@
 // Row types mirror supabase/migrations. Keep them in sync when the schema changes.
 
 export type Environment = "production" | "staging" | "development";
-export type MonitorType = "http_status" | "response_time" | "expected_content" | "ssl_expiry" | "broken_links";
+export type MonitorType =
+  | "http_status"
+  | "response_time"
+  | "expected_content"
+  | "ssl_expiry"
+  | "broken_links"
+  | "tracking_tags";
 export type CheckStatus = "passed" | "failed" | "warning";
 export type Severity = "critical" | "warning" | "informational";
 export type IncidentStatus =
@@ -52,6 +58,8 @@ export interface Monitor {
   expected_status_code: number | null;
   expected_text: string | null;
   max_response_time_ms: number | null;
+  /** Tracking tag monitors: tag keys that must be on the page (see monitoring/tracking.ts). */
+  expected_tags: string[];
   interval_minutes: number;
   severity_on_failure: Severity;
   active: boolean;

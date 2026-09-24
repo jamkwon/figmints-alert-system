@@ -16,6 +16,7 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 - **Phase 9 (alerts): Slack done.** Critical incidents are posted to a Slack channel when they open and when they resolve. See **Alerts**. Email and Basecamp aren't built yet.
 - **Phase 8 (advanced monitoring): SSL certificate expiry done.** An *SSL Certificate* monitor warns before a site's certificate expires. See **SSL certificates**.
 - **Phase 8: broken link scans done.** A *Broken Links* monitor scans a page's links, images, stylesheets and scripts. See **Broken link scans**.
+- **Phase 8: tracking tag checks done.** A *Tracking Tags* monitor makes sure GTM, GA4, Google Ads, Meta Pixel, LinkedIn Insight and HubSpot tags stay on a page. See **Tracking tags**.
 
 Running checks and updating incidents require Supabase. On sample data those controls are disabled.
 
@@ -88,6 +89,7 @@ The schema lives in `supabase/migrations/`. Sample data lives in `supabase/seed.
    - `20260926000000_alerts.sql` (Phase 9)
    - `20260927000000_ssl_expiry.sql` (Phase 8, SSL)
    - `20260928000000_broken_links.sql` (Phase 8, broken links)
+   - `20260929000000_tracking_tags.sql` (Phase 8, tracking tags)
 3. (Optional) Run `supabase/seed.sql` to load the 6 sample clients. You can re-run it safely; it replaces the earlier sample rows.
 4. Copy the project URL and the secret key into `.env.local`, then restart `npm run dev`.
 
@@ -127,7 +129,7 @@ Row-level security is enabled on every table with **no policies**. The public an
 | `npm start` | Serve the production build |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | Generate route types and run `tsc` |
-| `npm test` | Unit tests for health rules, check evaluation (HTTP, SSL, broken links), incident rules, alert rules, login rules, form validation and SSRF protection (Node's built-in test runner) |
+| `npm test` | Unit tests for health rules, check evaluation (HTTP, SSL, broken links, tracking tags), incident rules, alert rules, login rules, form validation and SSRF protection (Node's built-in test runner) |
 
 ## Project layout
 
@@ -151,6 +153,7 @@ src/
       run-check.ts      Performs one HTTP check (redirects, timeout, body limit, error messages)
       evaluate.ts       Pure pass/fail rules for a check (HTTP and SSL)
       links.ts          Broken link scans: which links to check, what counts as broken
+      tracking.ts       Tracking tag detection (GTM, GA4, Google Ads, Meta, LinkedIn, HubSpot)
       url-safety.ts     SSRF protection
       incident-engine.ts Pure rules: when to open, update or resolve an incident
       record.ts         Runs a check, saves the result, applies incident rules
@@ -173,6 +176,7 @@ Each check makes one `GET` request to the monitor's target URL and stores the re
 | HTTP Status | Status is 200–399, or exactly the monitor's *expected status* if one is set | Failed |
 | Expected Content | Status passes **and** the expected text appears in the page's visible text | Failed |
 | Response Time | Status passes **and** the full response takes no longer than *max response time* (default 3000 ms) | Warning (slow) |
+| Tracking Tags | The page loads and every expected tag is in its HTML | Failed, naming the missing tags (uses the monitor's severity; default Warning) |
 | Broken Links | The page loads and none of its first 40 links/images/stylesheets/scripts are broken | Warning when any are broken; Failed only if the page itself doesn't load |
 | SSL Certificate | The certificate is trusted, matches the domain, and has more than 14 days left | Warning at 14 days or less; Failed at 3 days or less, or when expired, untrusted or for the wrong domain |
 
@@ -201,6 +205,7 @@ Everything is managed in the app (Supabase must be connected):
   - Text after `|` makes it an **Expected Content** monitor that checks for that text. Without it, you get an **HTTP Status** monitor.
   - Names come from the path, e.g. `/free-estimate` becomes "Free Estimate Page". You can rename them afterwards.
   - Up to 25 lines at a time. New monitors are checked within 5 minutes.
+- **Add one monitor with every setting:** a client page → **Add monitors** → **One monitor (all settings)** tab. Choose the website, type, URL and that type's settings (expected status/text, response-time limit, tracking tags, interval, severity) in one step. Name is optional; it's taken from the page if left blank.
 - **Edit or pause a monitor:** the monitor's page → **Edit monitor**. Change its type, URL, expected status or text, response-time limit, interval or severity. Untick **Active** to pause it; re-activating makes it due right away.
 - **Websites:** a client page → **Add website** (e.g. staging) or **Edit** next to a website. Untick **Active** to stop checking it.
 - **Deactivate a client:** **Edit client** → untick **Active**. Its history is kept.
@@ -218,6 +223,25 @@ An **SSL Certificate** monitor opens a secure connection to the website (port 44
 - **Where you see it:** the expiry date and days left appear in monitor tables and on the monitor page, along with the issuer.
 - **Uptime:** SSL monitors don't count toward uptime, because an expiring certificate isn't downtime.
 - **Safety:** the connection uses the same SSRF protection as page checks.
+
+### Tracking tags
+
+A **Tracking Tags** monitor loads a page and looks for marketing and analytics tags in its HTML. It fails when a tag you expect is gone, for example after a theme update, a plugin change or a redesign.
+
+| Tag | Detected by | ID shown |
+| --- | --- | --- |
+| Google Tag Manager | `googletagmanager.com/gtm.js` or a `GTM-…` container ID | `GTM-XXXX` |
+| Google Analytics 4 | the `gtag.js?id=G-…` loader or `gtag('config', 'G-…')` | `G-XXXX` |
+| Google Ads | `AW-…` conversion IDs | `AW-123…` |
+| Meta Pixel | `fbevents.js` or `fbq('init', …)` | pixel ID |
+| LinkedIn Insight | `snap.licdn.com` insight script or `_linkedin_partner_id` | partner ID |
+| HubSpot | `hs-scripts.com`, `hs-analytics.net` or `hsforms.net` | portal ID |
+
+- **Adding one:** tick **Also watch the homepage's tracking tags** on **Add client** or **Add monitors**. The app looks at the homepage right away and **expects whatever tags are there now**. Checked every 6 hours; one per website.
+- **Choosing tags:** **Edit monitor** → tick the tags that must be on the page. The monitor page lists expected tags as *Present* or *Missing* with their IDs, and also tags that are on the page but not expected.
+- **Severity:** Warning by default. Set it to **Critical** for clients whose ads or reporting depend on it, so a missing tag posts to Slack.
+- **Limitation:** tags that Google Tag Manager loads, such as GA4 configured *inside* a GTM container, aren't in the page's HTML and can't be seen without a real browser. For those sites, expect **Google Tag Manager** itself. Verifying tags inside GTM would need browser monitoring (Phase 6).
+- **Uptime and safety:** like other page checks, it doesn't count toward uptime and uses the same SSRF protection.
 
 ### Broken link scans
 

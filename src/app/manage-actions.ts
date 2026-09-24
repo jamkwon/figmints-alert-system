@@ -3,6 +3,7 @@
 import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
 import { isStaffRequest } from "@/lib/auth/session";
+import { detectTrackingOnPage } from "@/lib/monitoring/run-check";
 import { MAINTENANCE_HOURS } from "@/lib/labels";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
 import type { Monitor, Website } from "@/lib/types";
@@ -11,9 +12,11 @@ import {
   parseBulkLines,
   parseCheckbox,
   parseEnvironment,
+  parseExpectedTags,
   parseExpectedText,
   parseInterval,
   parseMonitorType,
+  nameFromUrl,
   parseName,
   parseNotes,
   parseOptionalInt,
@@ -131,6 +134,41 @@ async function addLinkScanMonitor(websiteId: string, websiteUrl: string) {
   fail("add link scan", error);
 }
 
+/**
+ * Adds a tracking tag check for the homepage that expects whatever tags are
+ * there right now, unless the website already has one. If nothing is found (or
+ * the page can't load), it's added with no expectations; edit it to choose tags.
+ */
+async function addTrackingMonitor(websiteId: string, websiteUrl: string) {
+  const db = getSupabase();
+  const existing = await db
+    .from("monitors")
+    .select("id")
+    .eq("website_id", websiteId)
+    .eq("monitor_type", "tracking_tags")
+    .limit(1);
+  fail("check tracking monitors", existing.error);
+  if (existing.data?.length) return;
+  const target = new URL(websiteUrl).origin + "/";
+  let expected: string[] = [];
+  try {
+    expected = Object.keys((await detectTrackingOnPage(target)).found);
+  } catch {
+    // Page unreachable right now; the monitor still gets created.
+  }
+  const { error } = await db.from("monitors").insert({
+    website_id: websiteId,
+    name: "Tracking Tags (Homepage)",
+    monitor_type: "tracking_tags",
+    target_url: target,
+    expected_tags: expected,
+    interval_minutes: 360,
+    severity_on_failure: "warning",
+    next_check_at: null,
+  });
+  fail("add tracking check", error);
+}
+
 // Clients ---------------------------------------------------------------------
 
 export async function saveClientAction(_prev: FormState, formData: FormData): Promise<FormState> {
@@ -167,6 +205,7 @@ export async function saveClientAction(_prev: FormState, formData: FormData): Pr
       await insertMonitors(website.data!.id, pages, interval, severity);
       if (parseCheckbox(formData.get("ssl"))) await addSslMonitor(website.data!.id, primaryWebsite, severity);
       if (parseCheckbox(formData.get("links"))) await addLinkScanMonitor(website.data!.id, primaryWebsite);
+      if (parseCheckbox(formData.get("tags"))) await addTrackingMonitor(website.data!.id, primaryWebsite);
     }
     return `/clients/${client.data!.id}`;
   });
@@ -248,14 +287,69 @@ export async function addMonitorsAction(_prev: FormState, formData: FormData): P
     const lines = parseBulkLines(website.url, String(formData.get("pages") ?? ""));
     const ssl = parseCheckbox(formData.get("ssl"));
     const linkScan = parseCheckbox(formData.get("links"));
-    if (lines.length === 0 && !ssl && !linkScan) {
+    const tags = parseCheckbox(formData.get("tags"));
+    if (lines.length === 0 && !ssl && !linkScan && !tags) {
       throw new ValidationError("pages", "Add at least one page, or tick one of the extra checks.");
     }
     const severity = parseSeverity(formData.get("severity_on_failure"));
     await insertMonitors(website.id, lines, parseInterval(formData.get("interval_minutes")), severity);
     if (ssl) await addSslMonitor(website.id, website.url, severity);
     if (linkScan) await addLinkScanMonitor(website.id, website.url);
+    if (tags) await addTrackingMonitor(website.id, website.url);
     return `/clients/${website.client_id}`;
+  });
+}
+
+/** Validates the monitor settings shared by create and edit. */
+function parseMonitorFields(formData: FormData, websiteUrl: string) {
+  const monitorType = parseMonitorType(formData.get("monitor_type"));
+  // SSL, link scans and tag checks have their own rules; expected status/text don't apply.
+  const ownRules = monitorType === "ssl_expiry" || monitorType === "broken_links" || monitorType === "tracking_tags";
+  const expectedTags = monitorType === "tracking_tags" ? parseExpectedTags(formData.getAll("expected_tags")) : [];
+  const expectedText = ownRules ? null : parseExpectedText(formData.get("expected_text"));
+  if (monitorType === "expected_content" && !expectedText) {
+    throw new ValidationError("expected_text", "Expected Content monitors need the text to look for.");
+  }
+  const targetUrl = resolveMonitorUrl(websiteUrl, String(formData.get("target_url") ?? ""));
+  return {
+    monitor_type: monitorType,
+    target_url: targetUrl,
+    expected_status_code: ownRules
+      ? null
+      : parseOptionalInt(formData.get("expected_status_code"), "expected_status_code", "Expected status", 100, 599),
+    expected_text: expectedText,
+    expected_tags: expectedTags,
+    max_response_time_ms:
+      monitorType === "response_time"
+        ? parseOptionalInt(formData.get("max_response_time_ms"), "max_response_time_ms", "Max response time", 100, 60000)
+        : null,
+    interval_minutes: parseInterval(formData.get("interval_minutes")),
+    severity_on_failure: parseSeverity(formData.get("severity_on_failure")),
+    active: parseCheckbox(formData.get("active")),
+  };
+}
+
+/** Creates one monitor with all its settings. */
+export async function createMonitorAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return handle(async () => {
+    const websiteId = idFrom(formData, "website_id");
+    if (!websiteId) throw new ValidationError("website_id", "Choose a website.");
+    const website = await loadWebsite(websiteId);
+    const fields = parseMonitorFields(formData, website.url);
+    // Name is optional here; default to one based on the page.
+    const rawName = String(formData.get("name") ?? "").trim();
+    const name = rawName
+      ? parseName(rawName)
+      : fields.monitor_type === "ssl_expiry"
+        ? "SSL Certificate"
+        : nameFromUrl(fields.target_url);
+    const { data, error } = await getSupabase()
+      .from("monitors")
+      .insert({ ...fields, name, website_id: website.id, next_check_at: null })
+      .select("id")
+      .single();
+    fail("add monitor", error);
+    return `/monitors/${data!.id}`;
   });
 }
 
@@ -268,34 +362,14 @@ export async function saveMonitorAction(_prev: FormState, formData: FormData): P
     fail("load monitor", existing.error);
     if (!existing.data) throw new Error("Unknown monitor.");
     const website = await loadWebsite(existing.data.website_id);
-
-    const monitorType = parseMonitorType(formData.get("monitor_type"));
-    // SSL monitors and link scans have their own rules; expected status/text don't apply.
-    const ownRules = monitorType === "ssl_expiry" || monitorType === "broken_links";
-    const expectedText = ownRules ? null : parseExpectedText(formData.get("expected_text"));
-    if (monitorType === "expected_content" && !expectedText) {
-      throw new ValidationError("expected_text", "Expected Content monitors need the text to look for.");
-    }
-    const active = parseCheckbox(formData.get("active"));
+    const fields = parseMonitorFields(formData, website.url);
     const { error } = await db
       .from("monitors")
       .update({
+        ...fields,
         name: parseName(formData.get("name")),
-        monitor_type: monitorType,
-        target_url: resolveMonitorUrl(website.url, String(formData.get("target_url") ?? "")),
-        expected_status_code: ownRules
-          ? null
-          : parseOptionalInt(formData.get("expected_status_code"), "expected_status_code", "Expected status", 100, 599),
-        expected_text: expectedText,
-        max_response_time_ms:
-          monitorType === "response_time"
-            ? parseOptionalInt(formData.get("max_response_time_ms"), "max_response_time_ms", "Max response time", 100, 60000)
-            : null,
-        interval_minutes: parseInterval(formData.get("interval_minutes")),
-        severity_on_failure: parseSeverity(formData.get("severity_on_failure")),
-        active,
         // Resuming a paused monitor makes it due right away.
-        ...(active && !existing.data.active ? { next_check_at: null } : {}),
+        ...(fields.active && !existing.data.active ? { next_check_at: null } : {}),
       })
       .eq("id", id);
     fail("save monitor", error);
