@@ -63,3 +63,10 @@ test("names are derived from the URL path", () => {
   assert.equal(nameFromUrl("https://a.com/about-us/"), "About Us Page");
   assert.equal(nameFromUrl("https://a.com/files/brochure.pdf"), "Brochure Page");
 });
+
+test("expected tags keep known keys and need at least one", async () => {
+  const { parseExpectedTags } = await import("./validation.ts");
+  assert.deepEqual(parseExpectedTags(["gtm", "ga4", "gtm", "tiktok"]), ["gtm", "ga4"]);
+  rejects(() => parseExpectedTags([]), /at least one tag/);
+  rejects(() => parseExpectedTags(["tiktok"]), /at least one tag/);
+});

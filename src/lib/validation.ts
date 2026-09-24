@@ -2,6 +2,7 @@
 // can be tested directly. Every URL goes through the same SSRF rules as the checks.
 import { UnsafeUrlError, validateTargetUrl } from "./monitoring/url-safety.ts";
 import { ENVIRONMENTS, INTERVALS, MONITOR_TYPES, SEVERITIES } from "./labels.ts";
+import { isTrackingTag, type TrackingTag } from "./monitoring/tracking.ts";
 
 export class ValidationError extends Error {
   readonly field: string;
@@ -138,4 +139,11 @@ export function nameFromUrl(url: string): string {
   const words = last.replace(/\.[a-z0-9]+$/i, "").split(/[-_\s]+/).filter(Boolean);
   const title = words.map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
   return title ? `${title} Page`.slice(0, MAX_NAME) : "Page";
+}
+
+/** Checked tag boxes from the monitor form; unknown values are dropped. */
+export function parseExpectedTags(values: FormDataEntryValue[], field = "expected_tags"): TrackingTag[] {
+  const tags = [...new Set(values.filter(isTrackingTag))];
+  if (tags.length === 0) throw new ValidationError(field, "Choose at least one tag to expect on the page.");
+  return tags;
 }

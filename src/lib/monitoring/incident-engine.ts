@@ -37,6 +37,9 @@ export function titleForCheck(check: Check, monitorName: string, monitorType?: M
       : `SSL certificate problem on ${monitorName}`;
   }
   if (monitorType === "broken_links" && check.status === "warning") return `Broken links found on ${monitorName}`;
+  if (monitorType === "tracking_tags" && check.error_message?.startsWith("Missing tracking")) {
+    return `Tracking tags missing on ${monitorName}`;
+  }
   if (check.status === "warning") return `${monitorName} response time above threshold`;
   if (check.error_message?.startsWith("Expected text")) return `Expected content missing on ${monitorName}`;
   if (check.http_status !== null && check.http_status >= 400) return `${monitorName} returning HTTP ${check.http_status}`;

@@ -13,6 +13,7 @@ import {
   type HttpObservation,
 } from "./evaluate.ts";
 import { evaluateLinks, extractLinks, judgeLink, reasonFor, type BrokenLink, type LinkResponse } from "./links.ts";
+import { detectTags, evaluateTags, isTrackingTag, type TrackingTag } from "./tracking.ts";
 import { UnsafeUrlError, safeLookup, validateTargetUrl } from "./url-safety.ts";
 
 const TIMEOUT_MS = 15_000;
@@ -367,9 +368,59 @@ export async function performCertificateCheck(monitor: Monitor): Promise<HttpChe
   return { outcome, metadata };
 }
 
+// Tracking tags ---------------------------------------------------------------------
+
+/** Loads a page and returns the tracking tags in its HTML (with IDs). */
+export async function detectTrackingOnPage(
+  target: string,
+): Promise<{ found: Partial<Record<TrackingTag, string[]>>; status: number; finalUrl: string; responseTimeMs: number }> {
+  const started = performance.now();
+  const { response, url } = await safeFetch(validateTargetUrl(target), { signal: AbortSignal.timeout(TIMEOUT_MS) });
+  const html = (await readBody(response)).text;
+  return {
+    found: isExpectedStatus(response.status, null) ? detectTags(html) : {},
+    status: response.status,
+    finalUrl: url.toString(),
+    responseTimeMs: performance.now() - started,
+  };
+}
+
+export async function performTrackingCheck(monitor: Monitor): Promise<HttpCheckResult> {
+  const started = performance.now();
+  const metadata: CheckMetadata = {};
+  let page: Awaited<ReturnType<typeof detectTrackingOnPage>>;
+  try {
+    page = await detectTrackingOnPage(monitor.target_url);
+  } catch (err) {
+    const outcome = evaluateCheck(monitor, {
+      httpStatus: null,
+      statusText: "",
+      responseTimeMs: performance.now() - started,
+      body: null,
+      error: describeFetchError(err),
+    });
+    return { outcome, metadata };
+  }
+  // The page itself must load before its tags mean anything.
+  if (!isExpectedStatus(page.status, null)) {
+    const outcome = evaluateCheck(monitor, {
+      httpStatus: page.status,
+      statusText: "",
+      responseTimeMs: page.responseTimeMs,
+      body: null,
+      error: null,
+    });
+    return { outcome, metadata };
+  }
+  const expected = monitor.expected_tags.filter(isTrackingTag);
+  Object.assign(metadata, { final_url: page.finalUrl, tags_found: page.found, tags_expected: expected });
+  return { outcome: evaluateTags(expected, page.found, page.responseTimeMs, page.status), metadata };
+}
+
 /** Runs the right kind of check for the monitor. */
 export function performCheck(monitor: Monitor): Promise<HttpCheckResult> {
   if (monitor.monitor_type === "ssl_expiry") return performCertificateCheck(monitor);
   if (monitor.monitor_type === "broken_links") return performBrokenLinksCheck(monitor);
+  if (monitor.monitor_type === "tracking_tags") return performTrackingCheck(monitor);
   return performHttpCheck(monitor);
 }

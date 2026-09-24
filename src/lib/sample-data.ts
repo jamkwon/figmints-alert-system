@@ -177,6 +177,7 @@ export function buildSampleData(now: Date = new Date()): {
       expected_status_code: null,
       expected_text: opts.expectedText ?? null,
       max_response_time_ms: opts.maxMs ?? null,
+      expected_tags: [],
       interval_minutes: opts.interval,
       severity_on_failure: opts.severity,
       active: opts.active ?? true,
@@ -236,6 +237,20 @@ export function buildSampleData(now: Date = new Date()): {
   monitor(16, 4, "Broken Links (Homepage)", "broken_links", "https://summitridgeacademy.example/",
     { interval: 1440, severity: "warning", passingLatestMin: 1500,
       failures: fails("warning", 200, "2 broken links of 40 checked: /tuition-2024 (HTTP 404), /img/campus-map.pdf (HTTP 404)", [[60, 14200]]) });
+
+  monitor(17, 1, "Tracking Tags (Homepage)", "tracking_tags", "https://harborviewdental.example/",
+    { interval: 360, severity: "warning", passingLatestMin: 400,
+      failures: fails("failed", 200, "Missing tracking: Meta Pixel", [[50, 900]]) });
+  monitors.find((m) => m.id === mid(17))!.expected_tags = ["gtm", "ga4", "meta_pixel"];
+  for (const check of checkResults) {
+    if (check.monitor_id !== mid(17)) continue;
+    check.metadata = {
+      tags_expected: ["gtm", "ga4", "meta_pixel"],
+      tags_found: check.passed
+        ? { gtm: ["GTM-HVD2024"], ga4: ["G-HVD8K2L1Q"], meta_pixel: ["1122334455667788"] }
+        : { gtm: ["GTM-HVD2024"], ga4: ["G-HVD8K2L1Q"] },
+    };
+  }
 
   // Link scans record what they checked and what was broken.
   for (const check of checkResults) {
