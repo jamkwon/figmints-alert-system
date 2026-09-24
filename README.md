@@ -13,6 +13,7 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 - **Phase 4 (scheduled monitoring): done.** One scheduled worker, triggered every 5 minutes by Supabase `pg_cron`, checks every monitor that is due according to its interval. See **Scheduled checks**.
 - **Staff login: done.** Google sign-in limited to `@figmints.com` accounts. See **Login**.
 - **Phase 5 (operational improvements): done.** Add/edit clients, websites and monitors in the app (with bulk monitor setup), filters, timed snooze, website maintenance windows, uptime percentages, incident history, and automatic check-history cleanup.
+- **Phase 9 (alerts): Slack done.** Critical incidents are posted to a Slack channel when they open and when they resolve. See **Alerts**. Email and Basecamp aren't built yet.
 
 Running checks and updating incidents require Supabase. On sample data those controls are disabled.
 
@@ -47,6 +48,8 @@ Copy `.env.example` to `.env.local`:
 | `SUPABASE_PUBLISHABLE_KEY` | For login | Supabase publishable (or legacy anon) key, used only for the login session. Also accepted: `SUPABASE_ANON_KEY`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`. |
 | `ALLOWED_EMAIL_DOMAINS` | No | Comma-separated domains allowed to sign in. Default `figmints.com`. |
 | `CRON_SECRET` | For scheduled checks | Random string (16+ characters) that the scheduler must send. See **Scheduled checks**. |
+| `SLACK_WEBHOOK_URL` | For alerts | Slack Incoming Webhook (`https://hooks.slack.com/...`). **Secret.** No alerts are sent without it. |
+| `APP_URL` | No | Public app address for "Open incident" links in alerts. On Vercel the production domain is detected automatically. |
 | `APP_TIMEZONE` | No | Timezone for displayed times. Default `America/New_York`. |
 
 Both Supabase variables must be set for the app to use Supabase. Settings shows which data source is active and which variable names it found.
@@ -80,6 +83,7 @@ The schema lives in `supabase/migrations/`. Sample data lives in `supabase/seed.
    - `20260923000000_incident_engine.sql` (Phase 3)
    - `20260924000000_scheduler.sql` (Phase 4)
    - `20260925000000_operations.sql` (Phase 5)
+   - `20260926000000_alerts.sql` (Phase 9)
 3. (Optional) Run `supabase/seed.sql` to load the 6 sample clients. You can re-run it safely; it replaces the earlier sample rows.
 4. Copy the project URL and the secret key into `.env.local`, then restart `npm run dev`.
 
@@ -119,7 +123,7 @@ Row-level security is enabled on every table with **no policies**. The public an
 | `npm start` | Serve the production build |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | Generate route types and run `tsc` |
-| `npm test` | Unit tests for health rules, check evaluation, incident rules, login rules, form validation and SSRF protection (Node's built-in test runner) |
+| `npm test` | Unit tests for health rules, check evaluation, incident rules, alert rules, login rules, form validation and SSRF protection (Node's built-in test runner) |
 
 ## Project layout
 
@@ -138,6 +142,7 @@ src/
     auth/               Who may sign in (allowed.ts) and the staff check (session.ts)
     health.ts           Health rules: monitor → website → client roll-up
     validation.ts       Form parsing/validation (SSRF-safe URLs, bulk monitor lines)
+    notify/             Alerts: rules and Slack message format (alerts.ts), sending (send.ts)
     monitoring/
       run-check.ts      Performs one HTTP check (redirects, timeout, body limit, error messages)
       evaluate.ts       Pure pass/fail rules for a check
@@ -292,6 +297,33 @@ One scheduled worker checks every monitor that's due. There are no per-website c
 curl -X POST http://localhost:3000/api/cron/run-checks -H "Authorization: Bearer $CRON_SECRET"
 ```
 
+## Alerts
+
+Website Watch posts to **one Slack channel**. It's deliberately quiet, so people keep paying attention to it:
+
+| What happens | Slack message |
+| --- | --- |
+| A **Critical** incident opens (2 failed checks in a row) | :red_circle: `[CRITICAL] Client — Problem`, with the monitor, first detected time, error and an **Open incident** button |
+| A Warning incident **escalates** to Critical | :red_circle: same, noted "Escalated from Warning" |
+| A snoozed Critical incident **reopens** when its snooze ends | :red_circle: same, noted "Still failing after snooze" |
+| An alerted incident **resolves** (automatically or by someone) | :large_green_circle: `[RESOLVED] Client — Problem`, with how long it lasted and who resolved it |
+
+- **Never alerted:** Warnings, Expected Maintenance (including anything that opens during a maintenance window), Snoozed and Ignored incidents. They're on the Dashboard only.
+- **At most one alert per incident.** A resolution message is only sent for incidents that were alerted.
+- **Every alert shows in the incident's History,** as "Slack: alert posted" or "Slack alert failed: …".
+- **A failed alert is retried** on the incident's next change.
+
+### Setting up Slack (once)
+
+1. In Slack: **Apps → Incoming Webhooks** (or create an app at api.slack.com → *Incoming Webhooks*) → **Add to Slack** → pick the channel, e.g. `#website-alerts`. Copy the webhook URL (`https://hooks.slack.com/services/...`).
+2. Add it as `SLACK_WEBHOOK_URL`:
+   - **Vercel:** Settings → Environment Variables, Production, **Sensitive**, then redeploy.
+   - **Local:** add it to `.env.local` if you want local testing to post too. Leave it out otherwise, so local experiments stay quiet.
+3. Run the migration `20260926000000_alerts.sql` in Supabase.
+4. In the app, go to **Settings → Alerts → Send test alert**. A test message should appear in the channel.
+
+The webhook URL lets anyone post to that channel, so treat it like a password. If it leaks, remove the webhook in Slack and create a new one.
+
 ## Login
 
 Staff sign in with **Google**. Only accounts on an allowed domain (`figmints.com` by default) get in. Everyone else is sent back to the login page.
@@ -330,4 +362,5 @@ Staff sign in with **Google**. Only accounts on an allowed domain (`figmints.com
 - **SSRF protection** (`src/lib/monitoring/url-safety.ts`): only `http`/`https` on ports 80, 443, 8080 or 8443; no credentials in URLs; no internal hostnames (`localhost`, `*.local`, single-word names). Every DNS answer is checked **at connection time**, so private, loopback, link-local (including the `169.254.169.254` cloud metadata address), CGNAT, multicast and reserved IPv4/IPv6 addresses are refused, even after a redirect or a DNS change.
 - The Run check action accepts only a monitor ID and always fetches the URL stored in the database. It can't be used to request arbitrary addresses. Only signed-in staff can run it.
 - The scheduler endpoint refuses every request unless `CRON_SECRET` (16+ characters) is set and sent as `Authorization: Bearer …`. The comparison is constant-time. It only checks monitors already in the database.
+- Alerts are only posted to a `hooks.slack.com` webhook from `SLACK_WEBHOOK_URL`. Client names, titles and errors are escaped before they go into Slack formatting.
 - `claim_due_monitors` can only be called with the secret key; execution is revoked from the public `anon` and `authenticated` roles.
