@@ -83,6 +83,54 @@ async function insertMonitors(
   fail("add monitors", error);
 }
 
+/** Adds an SSL certificate monitor for the website, unless it already has one. */
+async function addSslMonitor(websiteId: string, websiteUrl: string, severity: Monitor["severity_on_failure"]) {
+  const db = getSupabase();
+  const existing = await db
+    .from("monitors")
+    .select("id")
+    .eq("website_id", websiteId)
+    .eq("monitor_type", "ssl_expiry")
+    .limit(1);
+  fail("check SSL monitors", existing.error);
+  if (existing.data?.length) return;
+  const { error } = await db.from("monitors").insert({
+    website_id: websiteId,
+    name: "SSL Certificate",
+    monitor_type: "ssl_expiry",
+    target_url: new URL(websiteUrl).origin + "/",
+    // Certificates change slowly; every 6 hours is plenty.
+    interval_minutes: 360,
+    severity_on_failure: severity,
+    next_check_at: null,
+  });
+  fail("add SSL monitor", error);
+}
+
+/** Adds a daily broken link scan of the website's homepage, unless it already has one. */
+async function addLinkScanMonitor(websiteId: string, websiteUrl: string) {
+  const db = getSupabase();
+  const existing = await db
+    .from("monitors")
+    .select("id")
+    .eq("website_id", websiteId)
+    .eq("monitor_type", "broken_links")
+    .limit(1);
+  fail("check link scans", existing.error);
+  if (existing.data?.length) return;
+  const { error } = await db.from("monitors").insert({
+    website_id: websiteId,
+    name: "Broken Links (Homepage)",
+    monitor_type: "broken_links",
+    target_url: new URL(websiteUrl).origin + "/",
+    // A scan makes up to 40 requests; once a day keeps it polite and cheap.
+    interval_minutes: 1440,
+    severity_on_failure: "warning",
+    next_check_at: null,
+  });
+  fail("add link scan", error);
+}
+
 // Clients ---------------------------------------------------------------------
 
 export async function saveClientAction(_prev: FormState, formData: FormData): Promise<FormState> {
@@ -117,6 +165,8 @@ export async function saveClientAction(_prev: FormState, formData: FormData): Pr
         .single();
       fail("create website", website.error);
       await insertMonitors(website.data!.id, pages, interval, severity);
+      if (parseCheckbox(formData.get("ssl"))) await addSslMonitor(website.data!.id, primaryWebsite, severity);
+      if (parseCheckbox(formData.get("links"))) await addLinkScanMonitor(website.data!.id, primaryWebsite);
     }
     return `/clients/${client.data!.id}`;
   });
@@ -196,13 +246,15 @@ export async function addMonitorsAction(_prev: FormState, formData: FormData): P
     if (!websiteId) throw new ValidationError("website_id", "Choose a website.");
     const website = await loadWebsite(websiteId);
     const lines = parseBulkLines(website.url, String(formData.get("pages") ?? ""));
-    if (lines.length === 0) throw new ValidationError("pages", "Add at least one page.");
-    await insertMonitors(
-      website.id,
-      lines,
-      parseInterval(formData.get("interval_minutes")),
-      parseSeverity(formData.get("severity_on_failure")),
-    );
+    const ssl = parseCheckbox(formData.get("ssl"));
+    const linkScan = parseCheckbox(formData.get("links"));
+    if (lines.length === 0 && !ssl && !linkScan) {
+      throw new ValidationError("pages", "Add at least one page, or tick one of the extra checks.");
+    }
+    const severity = parseSeverity(formData.get("severity_on_failure"));
+    await insertMonitors(website.id, lines, parseInterval(formData.get("interval_minutes")), severity);
+    if (ssl) await addSslMonitor(website.id, website.url, severity);
+    if (linkScan) await addLinkScanMonitor(website.id, website.url);
     return `/clients/${website.client_id}`;
   });
 }
@@ -218,7 +270,9 @@ export async function saveMonitorAction(_prev: FormState, formData: FormData): P
     const website = await loadWebsite(existing.data.website_id);
 
     const monitorType = parseMonitorType(formData.get("monitor_type"));
-    const expectedText = parseExpectedText(formData.get("expected_text"));
+    // SSL monitors and link scans have their own rules; expected status/text don't apply.
+    const ownRules = monitorType === "ssl_expiry" || monitorType === "broken_links";
+    const expectedText = ownRules ? null : parseExpectedText(formData.get("expected_text"));
     if (monitorType === "expected_content" && !expectedText) {
       throw new ValidationError("expected_text", "Expected Content monitors need the text to look for.");
     }
@@ -229,7 +283,9 @@ export async function saveMonitorAction(_prev: FormState, formData: FormData): P
         name: parseName(formData.get("name")),
         monitor_type: monitorType,
         target_url: resolveMonitorUrl(website.url, String(formData.get("target_url") ?? "")),
-        expected_status_code: parseOptionalInt(formData.get("expected_status_code"), "expected_status_code", "Expected status", 100, 599),
+        expected_status_code: ownRules
+          ? null
+          : parseOptionalInt(formData.get("expected_status_code"), "expected_status_code", "Expected status", 100, 599),
         expected_text: expectedText,
         max_response_time_ms:
           monitorType === "response_time"

@@ -4,8 +4,12 @@ import { CheckStatusBadge, HealthBadge, HealthDot, IncidentStatusBadge, TeamLabe
 import { Panel, PageHeader, When, table } from "@/components/ui";
 import { getAppData, type ClientView, type IncidentView, type MonitorView } from "@/lib/data";
 import { formatDateTime, formatUptime } from "@/lib/format";
+import { countsTowardUptime } from "@/lib/labels";
 import { isActiveIncident, needsAttention, type Health } from "@/lib/health";
 import type { Severity } from "@/lib/types";
+
+// Run check can start a broken link scan, which takes up to ~40 seconds.
+export const maxDuration = 60;
 
 const STAT_ACCENT: Partial<Record<Health, string>> = {
   critical: "border-t-fig-coral",
@@ -120,7 +124,7 @@ function FailingChecks({ monitors, sampleMode }: { monitors: MonitorView[]; samp
                 </Link>
               </td>
               <td className={`${table.td} max-w-md`}>
-                {summary?.last_status && <CheckStatusBadge status={summary.last_status} />}
+                {summary?.last_status && <CheckStatusBadge status={summary.last_status} monitorType={monitor.monitor_type} />}
                 {summary?.last_error_message && (
                   <div className="mt-1 text-xs text-red-700">{summary.last_error_message}</div>
                 )}
@@ -185,9 +189,10 @@ export default async function DashboardPage() {
   const activeWebsites = activeClients.flatMap((c) => c.websites).filter((w) => w.website.active);
   const runningMonitors = data.monitors.filter((m) => m.health !== "inactive");
   const checks24h = runningMonitors.reduce((n, m) => n + (m.uptime?.checks_24h ?? 0), 0);
+  const availability = runningMonitors.filter((m) => countsTowardUptime(m.monitor.monitor_type));
   const uptime7d = formatUptime(
-    runningMonitors.reduce((n, m) => n + (m.uptime?.passed_7d ?? 0), 0),
-    runningMonitors.reduce((n, m) => n + (m.uptime?.checks_7d ?? 0), 0),
+    availability.reduce((n, m) => n + (m.uptime?.passed_7d ?? 0), 0),
+    availability.reduce((n, m) => n + (m.uptime?.checks_7d ?? 0), 0),
   );
   const healthyWebsites = activeWebsites.filter((w) => w.health === "healthy");
 

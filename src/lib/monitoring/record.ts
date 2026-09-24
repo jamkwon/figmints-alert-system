@@ -7,7 +7,8 @@ import {
   type IncidentDecision,
 } from "@/lib/monitoring/incident-engine";
 import { SYSTEM_ACTOR, logIncidentEvent } from "@/lib/monitoring/incident-events";
-import { performHttpCheck } from "@/lib/monitoring/run-check";
+import { notifyIncidentChange } from "@/lib/notify/send";
+import { performCheck } from "@/lib/monitoring/run-check";
 import { getSupabase } from "@/lib/supabase/server";
 import type { CheckResult, Incident, Monitor } from "@/lib/types";
 
@@ -23,7 +24,7 @@ export interface RecordedCheck {
 /** Runs a monitor's check, stores the result, updates check times, and applies incident rules. */
 export async function runAndRecordCheck(monitor: Monitor): Promise<RecordedCheck> {
   const checkedAt = new Date();
-  const { outcome, metadata } = await performHttpCheck(monitor);
+  const { outcome, metadata } = await performCheck(monitor);
   const db = getSupabase();
 
   const { data, error } = await db
@@ -111,6 +112,7 @@ async function applyIncidentRules(monitor: Monitor): Promise<IncidentDecision["k
         `Opened after ${FAILURES_TO_OPEN} consecutive failed checks (${decision.incident.severity})` +
           (inMaintenance ? " during a maintenance window, so marked Expected Maintenance" : ""),
       );
+      await notifyIncidentChange("opened", insert.data.id);
       break;
     }
 
@@ -124,6 +126,7 @@ async function applyIncidentRules(monitor: Monitor): Promise<IncidentDecision["k
           "severity_changed",
           `Severity raised from ${existing!.severity} to ${decision.changes.severity}`,
         );
+        await notifyIncidentChange("escalated", existing!.id);
       }
       break;
     }
@@ -144,6 +147,7 @@ async function applyIncidentRules(monitor: Monitor): Promise<IncidentDecision["k
           ? `Closed automatically after ${SUCCESSES_TO_RESOLVE} successful checks (was ignored)`
           : `Resolved automatically after ${SUCCESSES_TO_RESOLVE} successful checks`,
       );
+      await notifyIncidentChange("resolved", existing!.id);
       break;
     }
   }

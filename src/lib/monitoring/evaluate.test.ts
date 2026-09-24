@@ -101,3 +101,46 @@ test("response time threshold defaults to 3000 ms", () => {
 test("slow responses only matter for response time monitors", () => {
   assert.equal(evaluateCheck(httpMonitor, obs({ responseTimeMs: 9000 })).status, "passed");
 });
+
+// SSL certificates
+import { evaluateCertificate } from "./evaluate.ts";
+
+const now = new Date("2026-09-27T12:00:00Z");
+const inDays = (d: number) => new Date(now.getTime() + d * 86_400_000 + 3_600_000);
+const cert = (days: number, extra: Partial<Parameters<typeof evaluateCertificate>[0]> = {}) =>
+  evaluateCertificate({ validTo: inDays(days), authorized: true, authorizationError: null, responseTimeMs: 120.6, error: null, ...extra }, now);
+
+test("certificates with plenty of time left pass", () => {
+  const outcome = cert(83);
+  assert.equal(outcome.status, "passed");
+  assert.equal(outcome.http_status, null);
+  assert.equal(outcome.response_time_ms, 121);
+});
+
+test("certificates expiring within 14 days warn", () => {
+  assert.equal(cert(14).status, "warning");
+  assert.equal(cert(10).error_message, "SSL certificate expires in 10 days");
+  assert.equal(cert(15).status, "passed");
+});
+
+test("certificates within 3 days, expired or untrusted fail", () => {
+  assert.equal(cert(3).status, "failed");
+  assert.equal(cert(1).error_message, "SSL certificate expires in 1 day");
+  const expired = evaluateCertificate({ validTo: new Date(now.getTime() - 2 * 86_400_000 - 1000), authorized: false, authorizationError: "CERT_HAS_EXPIRED", responseTimeMs: 5, error: null }, now);
+  assert.equal(expired.error_message, "SSL certificate expired 3 days ago");
+  assert.equal(cert(200, { authorized: false, authorizationError: "ERR_TLS_CERT_ALTNAME_INVALID" }).error_message, "SSL certificate does not match the domain");
+  assert.equal(cert(200, { authorized: false, authorizationError: "DEPTH_ZERO_SELF_SIGNED_CERT" }).error_message, "SSL certificate is self-signed");
+});
+
+test("connection errors fail with the error", () => {
+  const outcome = evaluateCertificate({ validTo: null, authorized: false, authorizationError: null, responseTimeMs: 0, error: "Connection refused" }, now);
+  assert.equal(outcome.status, "failed");
+  assert.equal(outcome.error_message, "Connection refused");
+});
+
+test("an untrusted issuer is described as such", () => {
+  assert.equal(
+    cert(200, { authorized: false, authorizationError: "SELF_SIGNED_CERT_IN_CHAIN" }).error_message,
+    "SSL certificate isn't issued by a trusted authority",
+  );
+});

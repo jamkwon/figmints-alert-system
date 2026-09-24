@@ -83,3 +83,49 @@ export function formatUptime(passed: number, checks: number): string | null {
   // Never round a real failure up to 100%.
   return `${Math.min(Math.floor(pct * 10) / 10, 99.9).toFixed(1)}%`;
 }
+
+export interface CertificateInfo {
+  validTo: string;
+  daysLeft: number | null;
+  issuer: string | null;
+}
+
+/** Certificate details from an SSL monitor's latest check metadata. */
+export function certificateInfo(metadata: Record<string, unknown> | null | undefined): CertificateInfo | null {
+  if (!metadata || typeof metadata.valid_to !== "string") return null;
+  return {
+    validTo: metadata.valid_to,
+    daysLeft: typeof metadata.days_left === "number" ? metadata.days_left : null,
+    issuer: typeof metadata.issuer === "string" ? metadata.issuer : null,
+  };
+}
+
+const dateOnly = new Intl.DateTimeFormat("en-US", {
+  timeZone: APP_TIMEZONE,
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+});
+
+export function formatDate(iso: string): string {
+  return dateOnly.format(new Date(iso));
+}
+
+export interface LinkScanInfo {
+  checked: number;
+  found: number;
+  unverified: number;
+  broken: { url: string; kind: string; text: string | null; reason: string }[];
+}
+
+/** Results of a broken link scan from its latest check metadata. */
+export function linkScanInfo(metadata: Record<string, unknown> | null | undefined): LinkScanInfo | null {
+  if (!metadata || typeof metadata.links_checked !== "number") return null;
+  const broken = Array.isArray(metadata.broken_links) ? (metadata.broken_links as LinkScanInfo["broken"]) : [];
+  return {
+    checked: metadata.links_checked,
+    found: typeof metadata.links_found === "number" ? metadata.links_found : metadata.links_checked,
+    unverified: typeof metadata.links_unverified === "number" ? metadata.links_unverified : 0,
+    broken,
+  };
+}

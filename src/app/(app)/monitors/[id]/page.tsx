@@ -7,10 +7,22 @@ import { RunCheckButton } from "@/components/run-check-button";
 import { CheckStatusBadge, HealthBadge, IncidentStatusBadge, SeverityBadge } from "@/components/status";
 import { LinkButton, Panel, PageHeader, When } from "@/components/ui";
 import { getAppData, getCheckHistory, type MonitorView } from "@/lib/data";
-import { displayUrl, formatDateTime, formatUptime, isInFuture, timeAgo } from "@/lib/format";
+import {
+  certificateInfo,
+  displayUrl,
+  linkScanInfo,
+  formatDate,
+  formatDateTime,
+  formatUptime,
+  isInFuture,
+  timeAgo,
+} from "@/lib/format";
 import { failingSince } from "@/lib/health";
 import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS, SEVERITY_LABELS, formatInterval } from "@/lib/labels";
-import { DEFAULT_MAX_RESPONSE_TIME_MS } from "@/lib/monitoring/evaluate";
+import { DEFAULT_MAX_RESPONSE_TIME_MS, SSL_FAILURE_DAYS, SSL_WARNING_DAYS } from "@/lib/monitoring/evaluate";
+
+// Run check can start a broken link scan, which takes up to ~40 seconds.
+export const maxDuration = 60;
 
 const HISTORY_LIMIT = 50;
 
@@ -47,6 +59,10 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
   if (!view) notFound();
 
   const { monitor, website, client, summary, health, activeIncident, uptime } = view;
+  const isSsl = monitor.monitor_type === "ssl_expiry";
+  const isLinkScan = monitor.monitor_type === "broken_links";
+  const cert = isSsl ? certificateInfo(summary?.last_metadata) : null;
+  const scan = isLinkScan ? linkScanInfo(summary?.last_metadata) : null;
   const uptimeRows = [
     { label: "Last 24 hours", passed: uptime?.passed_24h ?? 0, checks: uptime?.checks_24h ?? 0 },
     { label: "Last 7 days", passed: uptime?.passed_7d ?? 0, checks: uptime?.checks_7d ?? 0 },
@@ -90,17 +106,21 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
         <Stat label="Latest result">
           {summary?.last_status ? (
             <>
-              <CheckStatusBadge status={summary.last_status} />
+              <CheckStatusBadge status={summary.last_status} monitorType={monitor.monitor_type} />
               <div className="mt-1 text-xs text-slate-600">
-                {summary.last_http_status !== null && `HTTP ${summary.last_http_status}`}
-                {summary.last_response_time_ms !== null && ` · ${summary.last_response_time_ms} ms`}
+                {[
+                  summary.last_http_status !== null ? `HTTP ${summary.last_http_status}` : null,
+                  summary.last_response_time_ms !== null ? `${summary.last_response_time_ms} ms` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
               </div>
               {summary.last_error_message && (
                 <div className="mt-0.5 text-xs text-red-700">{summary.last_error_message}</div>
               )}
             </>
           ) : (
-            <span className="text-slate-400">No checks yet</span>
+              <span className="text-slate-400">No checks yet</span>
           )}
         </Stat>
         <Stat label="Last checked">
@@ -137,10 +157,64 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
 
       <div className="grid grid-cols-[2fr_1fr] items-start gap-6">
         <Panel title="Recent checks" aside={`Latest ${Math.min(history.length, HISTORY_LIMIT)}`}>
-          <CheckHistoryTable checks={history} />
+          <CheckHistoryTable checks={history} monitorType={monitor.monitor_type} />
         </Panel>
 
         <div className="space-y-6">
+          {isLinkScan ? (
+            <Panel title="Broken links" aside={scan ? `${scan.checked} of ${scan.found} checked` : undefined}>
+              {!scan ? (
+                <p className="px-4 py-4 text-sm text-slate-500">Not scanned yet.</p>
+              ) : scan.broken.length === 0 ? (
+                <p className="px-4 py-4 text-sm text-fig-teal">No broken links found in the last scan.</p>
+              ) : (
+                <ul className="divide-y divide-slate-100">
+                  {scan.broken.map((b) => (
+                    <li key={b.url} className="px-4 py-2.5 text-sm">
+                      <a href={b.url} target="_blank" rel="noopener noreferrer" className="break-all text-fig-plum hover:underline">
+                        {b.url.replace(/^https?:\/\//, "")}
+                      </a>
+                      <div className="text-xs text-slate-500">
+                        <span className="text-red-700">{b.reason}</span> · {b.kind}
+                        {b.text && <> · &ldquo;{b.text}&rdquo;</>}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {scan && scan.unverified > 0 && (
+                <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-500">
+                  {scan.unverified} link{scan.unverified === 1 ? "" : "s"} couldn&apos;t be verified (blocked, rate-limited or
+                  slow). Those aren&apos;t counted as broken.
+                </p>
+              )}
+            </Panel>
+          ) : isSsl ? (
+            <Panel title="Certificate">
+              <dl>
+                <ConfigRow label="Expires">
+                  {cert ? (
+                    <>
+                      <span className="font-semibold">{formatDate(cert.validTo)}</span>
+                      {cert.daysLeft !== null && (
+                        <span className="text-xs text-slate-500">
+                          {" "}
+                          ({cert.daysLeft >= 0 ? `${cert.daysLeft} days left` : "expired"})
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-slate-500">Not checked yet</span>
+                  )}
+                </ConfigRow>
+                <ConfigRow label="Issued by">{cert?.issuer ?? <span className="text-slate-500">Unknown</span>}</ConfigRow>
+                <ConfigRow label="Warns at">
+                  {SSL_WARNING_DAYS} days left{" "}
+                  <span className="text-xs text-slate-500">(fails at {SSL_FAILURE_DAYS} days, expired or untrusted)</span>
+                </ConfigRow>
+              </dl>
+            </Panel>
+          ) : (
           <Panel title="Uptime">
             <dl>
               {uptimeRows.map((row) => (
@@ -153,6 +227,7 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
               ))}
             </dl>
           </Panel>
+          )}
 
           <Panel title="Configuration">
             <dl>
@@ -160,12 +235,16 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
               <ConfigRow label="Website">
                 {displayUrl(website.url)} · {ENVIRONMENT_LABELS[website.environment]}
               </ConfigRow>
-              <ConfigRow label="Expected status">
-                {monitor.expected_status_code ?? <span className="text-slate-500">200–399 (default)</span>}
-              </ConfigRow>
-              <ConfigRow label="Expected text">
-                {monitor.expected_text ? `“${monitor.expected_text}”` : <span className="text-slate-500">None</span>}
-              </ConfigRow>
+              {!isSsl && !isLinkScan && (
+                <>
+                  <ConfigRow label="Expected status">
+                    {monitor.expected_status_code ?? <span className="text-slate-500">200–399 (default)</span>}
+                  </ConfigRow>
+                  <ConfigRow label="Expected text">
+                    {monitor.expected_text ? `“${monitor.expected_text}”` : <span className="text-slate-500">None</span>}
+                  </ConfigRow>
+                </>
+              )}
               {monitor.monitor_type === "response_time" && (
                 <ConfigRow label="Max response time">
                   {monitor.max_response_time_ms ?? `${DEFAULT_MAX_RESPONSE_TIME_MS} (default)`} ms

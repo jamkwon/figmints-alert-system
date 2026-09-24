@@ -11,6 +11,7 @@ import {
   type Health,
 } from "@/lib/health";
 import { requireStaff } from "@/lib/auth/session";
+import { countsTowardUptime } from "@/lib/labels";
 import { buildSampleData } from "@/lib/sample-data";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
 import type {
@@ -225,8 +226,9 @@ function buildAppData(s: Snapshot): Omit<AppData, "source" | "loadedAt"> {
         incidents: clientIncidents,
         activeIncidents: clientIncidents.filter((i) => isActiveIncident(i.incident)),
         lastCheckedAt: latest(clientMonitors.map((m) => m.monitor.last_checked_at)),
+        // SSL and link scans aren't availability checks, so they don't count toward uptime.
         uptime7d: clientMonitors
-          .filter((m) => m.monitor.active)
+          .filter((m) => m.monitor.active && countsTowardUptime(m.monitor.monitor_type))
           .reduce(
             (sum, m) => ({ passed: sum.passed + (m.uptime?.passed_7d ?? 0), checks: sum.checks + (m.uptime?.checks_7d ?? 0) }),
             { passed: 0, checks: 0 },

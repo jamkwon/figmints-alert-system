@@ -1,6 +1,6 @@
 // Pure incident rules: given a monitor's recent checks and its current unresolved
 // incident, decide what should change. No I/O, so it's easy to test.
-import type { CheckResult, Incident, Monitor, Severity } from "../types.ts";
+import type { CheckResult, Incident, Monitor, MonitorType, Severity } from "../types.ts";
 
 export const FAILURES_TO_OPEN = 2;
 export const SUCCESSES_TO_RESOLVE = 2;
@@ -30,7 +30,13 @@ export function severityForCheck(check: Check, monitorSeverity: Severity): Sever
   return monitorSeverity;
 }
 
-export function titleForCheck(check: Check, monitorName: string): string {
+export function titleForCheck(check: Check, monitorName: string, monitorType?: MonitorType): string {
+  if (monitorType === "ssl_expiry") {
+    return check.status === "warning"
+      ? `SSL certificate for ${monitorName} expires soon`
+      : `SSL certificate problem on ${monitorName}`;
+  }
+  if (monitorType === "broken_links" && check.status === "warning") return `Broken links found on ${monitorName}`;
   if (check.status === "warning") return `${monitorName} response time above threshold`;
   if (check.error_message?.startsWith("Expected text")) return `Expected content missing on ${monitorName}`;
   if (check.http_status !== null && check.http_status >= 400) return `${monitorName} returning HTTP ${check.http_status}`;
@@ -54,7 +60,7 @@ function leadingRun(history: Check[], passed: boolean): number {
  * @param current the monitor's unresolved incident, if any (any status except resolved)
  */
 export function decideIncident(
-  monitor: Pick<Monitor, "name" | "severity_on_failure">,
+  monitor: Pick<Monitor, "name" | "severity_on_failure"> & Partial<Pick<Monitor, "monitor_type">>,
   history: Check[],
   current: Pick<Incident, "severity"> | undefined,
 ): IncidentDecision {
@@ -83,7 +89,7 @@ export function decideIncident(
   return {
     kind: "open",
     incident: {
-      title: titleForCheck(latest, monitor.name),
+      title: titleForCheck(latest, monitor.name, monitor.monitor_type),
       description: describe(latest, failStreak),
       severity: streak
         .map((c) => severityForCheck(c, monitor.severity_on_failure))

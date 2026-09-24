@@ -193,7 +193,7 @@ export default async function IncidentDetailPage({ params }: PageProps<"/inciden
 
       {monitor && (
         <Panel title="Recent checks for this monitor" aside={`Latest ${history.length}`}>
-          <CheckHistoryTable checks={history} />
+          <CheckHistoryTable checks={history} monitorType={monitor.monitor_type} />
         </Panel>
       )}
     </>

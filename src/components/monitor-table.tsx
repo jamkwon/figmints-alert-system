@@ -3,12 +3,35 @@ import { RunCheckButton } from "@/components/run-check-button";
 import { HealthBadge } from "@/components/status";
 import { EmptyState, When, table } from "@/components/ui";
 import { getDataSource, type MonitorView } from "@/lib/data";
-import { displayUrl, formatUptime } from "@/lib/format";
-import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS, formatInterval } from "@/lib/labels";
+import { certificateInfo, displayUrl, formatDate, formatUptime, linkScanInfo } from "@/lib/format";
+import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS, countsTowardUptime, formatInterval } from "@/lib/labels";
 
 function LastResult({ view }: { view: MonitorView }) {
   const s = view.summary;
   if (!s?.last_status) return <span className="text-slate-400">No checks yet</span>;
+  const scan = view.monitor.monitor_type === "broken_links" ? linkScanInfo(s.last_metadata) : null;
+  if (scan) {
+    return (
+      <div className="text-xs text-slate-600">
+        {scan.checked} links checked
+        {scan.broken.length > 0 ? (
+          <span className="text-red-700"> · {scan.broken.length} broken</span>
+        ) : (
+          <> · none broken</>
+        )}
+      </div>
+    );
+  }
+  const cert = view.monitor.monitor_type === "ssl_expiry" ? certificateInfo(s.last_metadata) : null;
+  if (cert) {
+    return (
+      <div className="text-xs text-slate-600">
+        Expires {formatDate(cert.validTo)}
+        {cert.daysLeft !== null && cert.daysLeft >= 0 && <> · {cert.daysLeft} days</>}
+        {s.last_error_message && <div className="mt-0.5 text-red-700">{s.last_error_message}</div>}
+      </div>
+    );
+  }
   return (
     <div className="text-xs text-slate-600">
       {s.last_http_status !== null && <span>HTTP {s.last_http_status}</span>}
@@ -97,7 +120,8 @@ export function MonitorTable({
                   <When iso={view.summary?.last_success_at} />
                 </td>
                 <td className={`${table.td} whitespace-nowrap`}>
-                  {formatUptime(view.uptime?.passed_7d ?? 0, view.uptime?.checks_7d ?? 0) ?? (
+                  {(countsTowardUptime(monitor.monitor_type) &&
+                    formatUptime(view.uptime?.passed_7d ?? 0, view.uptime?.checks_7d ?? 0)) || (
                     <span className="text-slate-400">—</span>
                   )}
                 </td>

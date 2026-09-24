@@ -21,6 +21,9 @@ export async function generateMetadata({ params }: PageProps<"/clients/[id]">): 
   return { title: view?.client.name ?? "Client not found" };
 }
 
+// Run check can start a broken link scan, which takes up to ~40 seconds.
+export const maxDuration = 60;
+
 const RECENT_INCIDENT_LIMIT = 10;
 
 function StatCard({ label, children }: { label: string; children: ReactNode }) {

@@ -1,7 +1,7 @@
 // Row types mirror supabase/migrations. Keep them in sync when the schema changes.
 
 export type Environment = "production" | "staging" | "development";
-export type MonitorType = "http_status" | "response_time" | "expected_content";
+export type MonitorType = "http_status" | "response_time" | "expected_content" | "ssl_expiry" | "broken_links";
 export type CheckStatus = "passed" | "failed" | "warning";
 export type Severity = "critical" | "warning" | "informational";
 export type IncidentStatus =
@@ -82,6 +82,8 @@ export interface MonitorCheckSummary {
   last_response_time_ms: number | null;
   last_error_message: string | null;
   last_success_at: string | null;
+  /** Latest check's metadata (for SSL monitors: valid_to, days_left, issuer). */
+  last_metadata: Record<string, unknown> | null;
 }
 
 export interface Incident {
@@ -100,6 +102,8 @@ export interface Incident {
   internal_notes: string;
   /** Snoozed incidents reopen when this passes. */
   snoozed_until: string | null;
+  /** When the Slack alert for this incident went out (at most once). */
+  alerted_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -111,7 +115,9 @@ export type IncidentEventKind =
   | "assigned"
   | "notes_updated"
   | "resolved"
-  | "snooze_ended";
+  | "snooze_ended"
+  | "alert_sent"
+  | "alert_failed";
 
 export interface IncidentEvent {
   id: string;

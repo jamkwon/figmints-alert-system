@@ -108,3 +108,63 @@ export function evaluateCheck(monitor: MonitorRules, obs: HttpObservation): Chec
 
   return { ...base, status: "passed", passed: true, error_message: null };
 }
+
+// SSL certificates ----------------------------------------------------------------
+
+/** At or under this many days left: warning (renewal due soon). */
+export const SSL_WARNING_DAYS = 14;
+/** At or under this many days left: failed (about to break the site). */
+export const SSL_FAILURE_DAYS = 3;
+
+/** What the TLS handshake observed. `error` is set when no certificate was read. */
+export interface CertificateObservation {
+  validTo: Date | null;
+  /** Chain trusted and hostname matches. */
+  authorized: boolean;
+  authorizationError: string | null;
+  responseTimeMs: number;
+  error: string | null;
+}
+
+const DAY_MS = 86_400_000;
+
+function describeTlsError(code: string): string {
+  switch (code) {
+    case "CERT_HAS_EXPIRED":
+      return "SSL certificate has expired";
+    case "ERR_TLS_CERT_ALTNAME_INVALID":
+      return "SSL certificate does not match the domain";
+    case "DEPTH_ZERO_SELF_SIGNED_CERT":
+      return "SSL certificate is self-signed";
+    case "SELF_SIGNED_CERT_IN_CHAIN":
+      return "SSL certificate isn't issued by a trusted authority";
+    case "UNABLE_TO_VERIFY_LEAF_SIGNATURE":
+    case "UNABLE_TO_GET_ISSUER_CERT_LOCALLY":
+      return "SSL certificate chain is incomplete or untrusted";
+    default:
+      return `SSL certificate is not trusted (${code})`;
+  }
+}
+
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+export function daysUntil(validTo: Date, now: Date): number {
+  return Math.floor((validTo.getTime() - now.getTime()) / DAY_MS);
+}
+
+export function evaluateCertificate(obs: CertificateObservation, now: Date = new Date()): CheckOutcome {
+  const base = { http_status: null, response_time_ms: Math.round(obs.responseTimeMs) };
+  const fail = (message: string): CheckOutcome => ({ ...base, status: "failed", passed: false, error_message: message });
+
+  if (obs.error || !obs.validTo) return fail(obs.error ?? "No certificate received");
+  const days = daysUntil(obs.validTo, now);
+  if (days < 0) return fail(`SSL certificate expired ${plural(-days, "day")} ago`);
+  if (!obs.authorized) return fail(describeTlsError(obs.authorizationError ?? "UNKNOWN"));
+  if (days <= SSL_FAILURE_DAYS) return fail(`SSL certificate expires in ${plural(days, "day")}`);
+  if (days <= SSL_WARNING_DAYS) {
+    return { ...base, status: "warning", passed: false, error_message: `SSL certificate expires in ${plural(days, "day")}` };
+  }
+  return { ...base, status: "passed", passed: true, error_message: null };
+}

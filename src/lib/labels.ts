@@ -10,6 +10,8 @@ export const MONITOR_TYPE_LABELS: Record<MonitorType, string> = {
   http_status: "HTTP Status",
   response_time: "Response Time",
   expected_content: "Expected Content",
+  ssl_expiry: "SSL Certificate",
+  broken_links: "Broken Links",
 };
 
 export const SEVERITY_LABELS: Record<Severity, string> = {
@@ -62,6 +64,17 @@ export function durationLabel(hours: number): string {
 
 // Allowed values for forms. Kept here (no server imports) so client components can use them.
 export const INTERVALS = [5, 15, 30, 60, 360, 1440] as const;
-export const MONITOR_TYPES: readonly MonitorType[] = ["http_status", "expected_content", "response_time"];
+export const MONITOR_TYPES: readonly MonitorType[] = [
+  "http_status",
+  "expected_content",
+  "response_time",
+  "ssl_expiry",
+  "broken_links",
+];
+
+/** Availability checks count toward uptime; SSL and link scans don't (they aren't downtime). */
+export function countsTowardUptime(type: MonitorType): boolean {
+  return type === "http_status" || type === "expected_content" || type === "response_time";
+}
 export const SEVERITIES: readonly Severity[] = ["critical", "warning", "informational"];
 export const ENVIRONMENTS: readonly Environment[] = ["production", "staging", "development"];
