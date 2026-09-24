@@ -1,6 +1,7 @@
 import "server-only";
 import { SYSTEM_ACTOR, logIncidentEvent } from "@/lib/monitoring/incident-events";
 import { runAndRecordCheck } from "@/lib/monitoring/record";
+import { notifyIncidentChange } from "@/lib/notify/send";
 import { getSupabase } from "@/lib/supabase/server";
 import type { Monitor } from "@/lib/types";
 
@@ -96,7 +97,10 @@ async function reopenExpiredSnoozes(): Promise<number> {
     console.error("[scheduler] could not reopen snoozed incidents:", error.message);
     return 0;
   }
-  for (const { id } of data ?? []) await logIncidentEvent(id, SYSTEM_ACTOR, "snooze_ended", "Snooze ended; reopened");
+  for (const { id } of data ?? []) {
+    await logIncidentEvent(id, SYSTEM_ACTOR, "snooze_ended", "Snooze ended; reopened");
+    await notifyIncidentChange("snooze_ended", id);
+  }
   return data?.length ?? 0;
 }
 

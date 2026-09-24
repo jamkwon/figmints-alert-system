@@ -7,6 +7,7 @@ import { INCIDENT_STATUS_LABELS, SNOOZE_HOURS, TEAM_LABELS, durationLabel } from
 import type { IncidentDecision } from "@/lib/monitoring/incident-engine";
 import { logIncidentEvent } from "@/lib/monitoring/incident-events";
 import { runAndRecordCheck } from "@/lib/monitoring/record";
+import { notifyIncidentChange, sendTestAlert } from "@/lib/notify/send";
 import { runDueChecks } from "@/lib/monitoring/scheduler";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
 import type { AssignedTeam, Incident, IncidentStatus, Monitor } from "@/lib/types";
@@ -155,7 +156,9 @@ export async function setIncidentStatusAction(
         : status === "open"
           ? "Reopened"
           : `Marked ${INCIDENT_STATUS_LABELS[status]}`;
-  await logIncidentEvent(incidentId, await currentActor(), status === "resolved" ? "resolved" : "status_changed", message);
+  const actor = await currentActor();
+  await logIncidentEvent(incidentId, actor, status === "resolved" ? "resolved" : "status_changed", message);
+  if (status === "resolved") await notifyIncidentChange("resolved", incidentId, actor);
   refresh();
   return { ok: true, message: `${message}.` };
 }
@@ -212,4 +215,13 @@ export async function runDueChecksAction(): Promise<RunCheckResult> {
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : "Scheduler failed." };
   }
+}
+
+// Alerts ------------------------------------------------------------------------
+
+/** Posts a test message to the configured Slack channel. */
+export async function sendTestAlertAction(): Promise<RunCheckResult> {
+  if (!(await isStaffRequest())) return SIGNED_OUT;
+  const failure = await sendTestAlert(await currentActor());
+  return failure ? { ok: false, message: failure } : { ok: true, message: "Test alert posted to Slack." };
 }
