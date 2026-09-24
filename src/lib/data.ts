@@ -225,8 +225,9 @@ function buildAppData(s: Snapshot): Omit<AppData, "source" | "loadedAt"> {
         incidents: clientIncidents,
         activeIncidents: clientIncidents.filter((i) => isActiveIncident(i.incident)),
         lastCheckedAt: latest(clientMonitors.map((m) => m.monitor.last_checked_at)),
+        // SSL monitors aren't availability checks, so they don't count toward uptime.
         uptime7d: clientMonitors
-          .filter((m) => m.monitor.active)
+          .filter((m) => m.monitor.active && m.monitor.monitor_type !== "ssl_expiry")
           .reduce(
             (sum, m) => ({ passed: sum.passed + (m.uptime?.passed_7d ?? 0), checks: sum.checks + (m.uptime?.checks_7d ?? 0) }),
             { passed: 0, checks: 0 },

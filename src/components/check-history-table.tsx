@@ -1,8 +1,8 @@
 import { CheckStatusBadge } from "@/components/status";
 import { EmptyState, When, table } from "@/components/ui";
-import type { CheckResult } from "@/lib/types";
+import type { CheckResult, MonitorType } from "@/lib/types";
 
-export function CheckHistoryTable({ checks }: { checks: CheckResult[] }) {
+export function CheckHistoryTable({ checks, monitorType }: { checks: CheckResult[]; monitorType?: MonitorType }) {
   if (checks.length === 0) return <EmptyState>No checks have run yet.</EmptyState>;
   return (
     <div className={table.wrapper}>
@@ -20,7 +20,7 @@ export function CheckHistoryTable({ checks }: { checks: CheckResult[] }) {
           {checks.map((check) => (
             <tr key={check.id} className={table.row}>
               <td className={table.td}>
-                <CheckStatusBadge status={check.status} />
+                <CheckStatusBadge status={check.status} monitorType={monitorType} />
               </td>
               <td className={table.td}>
                 <When iso={check.checked_at} />

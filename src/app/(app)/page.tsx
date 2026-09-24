@@ -120,7 +120,7 @@ function FailingChecks({ monitors, sampleMode }: { monitors: MonitorView[]; samp
                 </Link>
               </td>
               <td className={`${table.td} max-w-md`}>
-                {summary?.last_status && <CheckStatusBadge status={summary.last_status} />}
+                {summary?.last_status && <CheckStatusBadge status={summary.last_status} monitorType={monitor.monitor_type} />}
                 {summary?.last_error_message && (
                   <div className="mt-1 text-xs text-red-700">{summary.last_error_message}</div>
                 )}
@@ -185,9 +185,10 @@ export default async function DashboardPage() {
   const activeWebsites = activeClients.flatMap((c) => c.websites).filter((w) => w.website.active);
   const runningMonitors = data.monitors.filter((m) => m.health !== "inactive");
   const checks24h = runningMonitors.reduce((n, m) => n + (m.uptime?.checks_24h ?? 0), 0);
+  const availability = runningMonitors.filter((m) => m.monitor.monitor_type !== "ssl_expiry");
   const uptime7d = formatUptime(
-    runningMonitors.reduce((n, m) => n + (m.uptime?.passed_7d ?? 0), 0),
-    runningMonitors.reduce((n, m) => n + (m.uptime?.checks_7d ?? 0), 0),
+    availability.reduce((n, m) => n + (m.uptime?.passed_7d ?? 0), 0),
+    availability.reduce((n, m) => n + (m.uptime?.checks_7d ?? 0), 0),
   );
   const healthyWebsites = activeWebsites.filter((w) => w.health === "healthy");
 

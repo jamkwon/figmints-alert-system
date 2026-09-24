@@ -87,6 +87,7 @@ export function ClientForm({ client }: { client?: Client }) {
               <SeveritySelect />
             </Field>
           </div>
+          <Checkbox name="ssl" label="Also check the SSL certificate (warns 14 days before it expires)" defaultChecked />
           <p className="text-xs text-slate-500">Leave Pages empty to add monitors later. New monitors are checked within 5 minutes.</p>
         </fieldset>
       )}
@@ -154,7 +155,7 @@ export function AddMonitorsForm({
         </select>
       </Field>
       <Field label="Pages" hint={PAGES_HINT} error={fieldError(state, "pages")}>
-        <textarea name="pages" rows={6} required placeholder={"/\n/contact | Contact Us\n/services"} className={`${inputClass} font-mono`} />
+        <textarea name="pages" rows={6} placeholder={"/\n/contact | Contact Us\n/services"} className={`${inputClass} font-mono`} />
       </Field>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Check">
@@ -164,6 +165,7 @@ export function AddMonitorsForm({
           <SeveritySelect />
         </Field>
       </div>
+      <Checkbox name="ssl" label="Also check the SSL certificate (skipped if this website already has one)" />
       <p className="text-xs text-slate-500">
         Names come from the page path (you can rename them after). New monitors are checked within 5 minutes.
       </p>
@@ -186,7 +188,11 @@ export function MonitorForm({ monitor }: { monitor: Monitor }) {
         <input name="target_url" required defaultValue={monitor.target_url} className={inputClass} />
       </Field>
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Type" error={fieldError(state, "monitor_type")}>
+        <Field
+          label="Type"
+          hint="SSL Certificate checks only the certificate; the page fields below are ignored."
+          error={fieldError(state, "monitor_type")}
+        >
           <select name="monitor_type" defaultValue={monitor.monitor_type} className={inputClass}>
             {MONITOR_TYPES.map((t) => (
               <option key={t} value={t}>

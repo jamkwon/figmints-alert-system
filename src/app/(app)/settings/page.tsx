@@ -8,6 +8,7 @@ import { Panel, PageHeader, When } from "@/components/ui";
 import { getDataSource, getSchedulerStatus } from "@/lib/data";
 import { APP_TIMEZONE } from "@/lib/format";
 import { allowedDomains } from "@/lib/auth/session";
+import { SSL_FAILURE_DAYS, SSL_WARNING_DAYS } from "@/lib/monitoring/evaluate";
 import { RETENTION_DAYS } from "@/lib/monitoring/scheduler";
 import { appUrl, slackWebhookUrl } from "@/lib/notify/send";
 import { supabaseEnvStatus } from "@/lib/supabase/server";
@@ -111,6 +112,10 @@ export default async function SettingsPage() {
           <Row label="Default HTTP success">Status 200–399 (unless a monitor sets an expected status)</Row>
           <Row label="Display timezone">{APP_TIMEZONE}</Row>
           <Row label="Check intervals">5 min, 15 min, 30 min, 1 hour, 6 hours, daily</Row>
+          <Row label="SSL certificates">
+            Warning at {SSL_WARNING_DAYS} days left; failed at {SSL_FAILURE_DAYS} days, or when expired, untrusted or for
+            the wrong domain
+          </Row>
           <Row label="Snooze options">1 hour, 4 hours, 24 hours, 7 days <span className="text-slate-500">(reopens automatically)</span></Row>
           <Row label="Check history kept">{RETENTION_DAYS} days <span className="text-slate-500">(older results are deleted hourly)</span></Row>
         </dl>

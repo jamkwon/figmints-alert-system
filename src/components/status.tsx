@@ -1,6 +1,6 @@
 import type { Health } from "@/lib/health";
 import { INCIDENT_STATUS_LABELS, SEVERITY_LABELS, TEAM_LABELS } from "@/lib/labels";
-import type { AssignedTeam, CheckStatus, IncidentStatus, Severity } from "@/lib/types";
+import type { AssignedTeam, CheckStatus, IncidentStatus, MonitorType, Severity } from "@/lib/types";
 
 // One place for status colors so every screen uses the same indicators:
 // red = critical, amber = warning, teal = healthy, gray = informational/inactive.
@@ -69,10 +69,10 @@ const CHECK_STATUS_DISPLAY: Record<CheckStatus, { health: Health; label: string 
   failed: { health: "critical", label: "Failed" },
 };
 
-/** Result of a single check run. */
-export function CheckStatusBadge({ status }: { status: CheckStatus }) {
+/** Result of a single check run. A warning means "slow" for pages, "expiring soon" for certificates. */
+export function CheckStatusBadge({ status, monitorType }: { status: CheckStatus; monitorType?: MonitorType }) {
   const { health, label } = CHECK_STATUS_DISPLAY[status];
-  return <HealthBadge health={health} label={label} />;
+  return <HealthBadge health={health} label={status === "warning" && monitorType === "ssl_expiry" ? "Expiring soon" : label} />;
 }
 
 const INCIDENT_STATUS_STYLES: Record<IncidentStatus, string> = {

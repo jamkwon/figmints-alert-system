@@ -37,6 +37,7 @@ export function summarizeChecks(monitorId: string, checks: CheckResult[]): Monit
     last_response_time_ms: latest?.response_time_ms ?? null,
     last_error_message: latest?.error_message ?? null,
     last_success_at: own.find((c) => c.passed)?.checked_at ?? null,
+    last_metadata: latest?.metadata ?? null,
   };
 }
 
@@ -226,6 +227,26 @@ export function buildSampleData(now: Date = new Date()): {
         [[53, 820], [38, 790], [23, 845], [8, 801]]) });
   monitor(13, 7, "Homepage", "http_status", "https://mapleoaklaw.example/",
     { interval: 60, severity: "critical", active: false, passingLatestMin: 17280 });
+  monitor(14, 3, "SSL Certificate", "ssl_expiry", "https://bluefinchbakery.example/",
+    { interval: 360, severity: "critical", passingLatestMin: 45 });
+  monitor(15, 6, "SSL Certificate", "ssl_expiry", "https://coastalroofingpros.example/",
+    { interval: 360, severity: "critical", passingLatestMin: 400,
+      failures: fails("warning", 0, "SSL certificate expires in 12 days", [[40, 140]]) });
+
+  // SSL checks carry the certificate's expiry instead of an HTTP status.
+  const certExpiry: Record<string, number> = { [mid(14)]: 83, [mid(15)]: 12 };
+  for (const check of checkResults) {
+    const daysFromNow = certExpiry[check.monitor_id];
+    if (daysFromNow === undefined) continue;
+    const validTo = new Date(now.getTime() + daysFromNow * 86_400_000 + 3_600_000);
+    check.http_status = null;
+    check.response_time_ms = 140;
+    check.metadata = {
+      valid_to: validTo.toISOString(),
+      days_left: Math.floor((validTo.getTime() - new Date(check.checked_at).getTime()) / 86_400_000),
+      issuer: "Let's Encrypt",
+    };
+  }
 
   checkResults.sort((a, b) => b.checked_at.localeCompare(a.checked_at));
   const summaries = monitors.map((m) => summarizeChecks(m.id, checkResults));

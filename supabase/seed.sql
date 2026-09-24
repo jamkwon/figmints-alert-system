@@ -137,3 +137,26 @@ from (values
 update public.websites
 set maintenance_until = now() + interval '2 days', maintenance_note = 'Planned rebuild'
 where id = '22222222-2222-4222-8222-000000000005';
+
+-- SSL certificate monitors (Phase 8): Blue Finch is fine (83 days left),
+-- Coastal Roofing expires in 12 days (warning).
+insert into public.monitors (id, website_id, name, monitor_type, target_url, interval_minutes, severity_on_failure, last_checked_at, next_check_at)
+values
+  ('33333333-3333-4333-8333-000000000014', '22222222-2222-4222-8222-000000000003', 'SSL Certificate', 'ssl_expiry',
+   'https://bluefinchbakery.example/', 360, 'critical', now() - interval '45 minutes', now() + interval '315 minutes'),
+  ('33333333-3333-4333-8333-000000000015', '22222222-2222-4222-8222-000000000006', 'SSL Certificate', 'ssl_expiry',
+   'https://coastalroofingpros.example/', 360, 'critical', now() - interval '40 minutes', now() + interval '320 minutes');
+
+insert into public.check_results (monitor_id, status, checked_at, response_time_ms, passed, error_message, metadata)
+select v.monitor_id::uuid, v.status, now() - make_interval(mins => v.min_ago), 140, v.passed, v.error_message,
+  jsonb_build_object(
+    'valid_to', now() + make_interval(days => v.days_from_now),
+    'days_left', v.days_from_now + floor(v.min_ago / 1440.0)::int,
+    'issuer', 'Let''s Encrypt'
+  )
+from (values
+  ('33333333-3333-4333-8333-000000000014', 'passed', 45, true, null, 83),
+  ('33333333-3333-4333-8333-000000000014', 'passed', 405, true, null, 83),
+  ('33333333-3333-4333-8333-000000000015', 'warning', 40, false, 'SSL certificate expires in 12 days', 12),
+  ('33333333-3333-4333-8333-000000000015', 'passed', 400, true, null, 12)
+) as v(monitor_id, status, min_ago, passed, error_message, days_from_now);
