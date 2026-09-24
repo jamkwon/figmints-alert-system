@@ -96,3 +96,15 @@ test("titles describe the kind of failure", () => {
   assert.equal(titleForCheck(fail("t", "DNS lookup failed (domain not found)", null), "Homepage"), "Homepage is unreachable");
   assert.equal(titleForCheck(fail("t", "HTTP 404 Not Found", 404), "Homepage"), "Homepage returning HTTP 404");
 });
+
+test("SSL monitors get certificate-specific titles", () => {
+  const ssl = { name: "Homepage", severity_on_failure: "critical" as const, monitor_type: "ssl_expiry" as const };
+  const soon: Check = { status: "warning", passed: false, checked_at: "t2", http_status: null, error_message: "SSL certificate expires in 10 days" };
+  const warn = decideIncident(ssl, [soon, { ...soon, checked_at: "t1" }], undefined);
+  assert.equal(warn.kind === "open" && warn.incident.title, "SSL certificate for Homepage expires soon");
+  assert.equal(warn.kind === "open" && warn.incident.severity, "warning");
+  const expired: Check = { ...soon, status: "failed", error_message: "SSL certificate expired 2 days ago" };
+  const crit = decideIncident(ssl, [expired, { ...expired, checked_at: "t1" }], undefined);
+  assert.equal(crit.kind === "open" && crit.incident.title, "SSL certificate problem on Homepage");
+  assert.equal(crit.kind === "open" && crit.incident.severity, "critical");
+});

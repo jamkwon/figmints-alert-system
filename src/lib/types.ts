@@ -1,7 +1,7 @@
 // Row types mirror supabase/migrations. Keep them in sync when the schema changes.
 
 export type Environment = "production" | "staging" | "development";
-export type MonitorType = "http_status" | "response_time" | "expected_content";
+export type MonitorType = "http_status" | "response_time" | "expected_content" | "ssl_expiry";
 export type CheckStatus = "passed" | "failed" | "warning";
 export type Severity = "critical" | "warning" | "informational";
 export type IncidentStatus =
@@ -82,6 +82,8 @@ export interface MonitorCheckSummary {
   last_response_time_ms: number | null;
   last_error_message: string | null;
   last_success_at: string | null;
+  /** Latest check's metadata (for SSL monitors: valid_to, days_left, issuer). */
+  last_metadata: Record<string, unknown> | null;
 }
 
 export interface Incident {

@@ -30,6 +30,7 @@ function summary(last_status: MonitorCheckSummary["last_status"]): MonitorCheckS
     last_response_time_ms: null,
     last_error_message: null,
     last_success_at: null,
+    last_metadata: null,
   };
 }
 

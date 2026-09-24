@@ -8,7 +8,7 @@ import {
 } from "@/lib/monitoring/incident-engine";
 import { SYSTEM_ACTOR, logIncidentEvent } from "@/lib/monitoring/incident-events";
 import { notifyIncidentChange } from "@/lib/notify/send";
-import { performHttpCheck } from "@/lib/monitoring/run-check";
+import { performCheck } from "@/lib/monitoring/run-check";
 import { getSupabase } from "@/lib/supabase/server";
 import type { CheckResult, Incident, Monitor } from "@/lib/types";
 
@@ -24,7 +24,7 @@ export interface RecordedCheck {
 /** Runs a monitor's check, stores the result, updates check times, and applies incident rules. */
 export async function runAndRecordCheck(monitor: Monitor): Promise<RecordedCheck> {
   const checkedAt = new Date();
-  const { outcome, metadata } = await performHttpCheck(monitor);
+  const { outcome, metadata } = await performCheck(monitor);
   const db = getSupabase();
 
   const { data, error } = await db
