@@ -132,3 +132,8 @@ from (values
    'Contact page returned 404 after menu update', 'Failed 2 consecutive checks. /contact returned HTTP 404.',
    'critical', 'resolved', 8640, 8625, 8595, 'account_management', 'Page slug changed during a content update. Redirect added.')
 ) as v(id, client_id, website_id, monitor_id, title, description, severity, status, first_min, last_min, resolved_min, team, notes);
+
+-- Staging is mid-rebuild: in a maintenance window for the next 2 days (Phase 5).
+update public.websites
+set maintenance_until = now() + interval '2 days', maintenance_note = 'Planned rebuild'
+where id = '22222222-2222-4222-8222-000000000005';

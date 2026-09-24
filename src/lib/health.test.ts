@@ -48,6 +48,7 @@ function incident(overrides: Partial<Incident>): Incident {
     resolved_at: null,
     assigned_team: "unassigned",
     internal_notes: "",
+    snoozed_until: null,
     created_at: "",
     updated_at: "",
     ...overrides,

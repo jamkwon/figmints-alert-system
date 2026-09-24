@@ -1,10 +1,11 @@
 "use server";
 
 import { refresh } from "next/cache";
-import { isStaffRequest } from "@/lib/auth/session";
+import { getStaffUser, isStaffRequest } from "@/lib/auth/session";
 import { isUnresolvedIncident } from "@/lib/health";
-import { INCIDENT_STATUS_LABELS, TEAM_LABELS } from "@/lib/labels";
+import { INCIDENT_STATUS_LABELS, SNOOZE_HOURS, TEAM_LABELS, durationLabel } from "@/lib/labels";
 import type { IncidentDecision } from "@/lib/monitoring/incident-engine";
+import { logIncidentEvent } from "@/lib/monitoring/incident-events";
 import { runAndRecordCheck } from "@/lib/monitoring/record";
 import { runDueChecks } from "@/lib/monitoring/scheduler";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
@@ -95,35 +96,68 @@ const SETTABLE_STATUSES: readonly IncidentStatus[] = [
 const TEAMS = Object.keys(TEAM_LABELS) as AssignedTeam[];
 const MAX_NOTES_LENGTH = 5000;
 
-async function loadIncidentState(incidentId: string): Promise<IncidentActionResult | { resolved: boolean }> {
+type IncidentState = Pick<Incident, "status" | "resolved_at" | "assigned_team" | "internal_notes">;
+
+async function loadIncidentState(incidentId: string): Promise<IncidentActionResult | { incident: IncidentState }> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Connect Supabase to update incidents." };
   if (typeof incidentId !== "string" || !UUID.test(incidentId)) return { ok: false, message: "Unknown incident." };
   const { data, error } = await getSupabase()
     .from("incidents")
-    .select("status, resolved_at")
+    .select("status, resolved_at, assigned_team, internal_notes")
     .eq("id", incidentId)
     .maybeSingle();
   if (error) return { ok: false, message: `Could not load incident: ${error.message}` };
   if (!data) return { ok: false, message: "Unknown incident." };
-  return { resolved: !isUnresolvedIncident(data as Pick<Incident, "status" | "resolved_at">) };
+  return { incident: data as IncidentState };
 }
 
-/** Status actions: Mark Investigating, Snooze, Expected Maintenance, Ignore, Resolve, Reopen. */
-export async function setIncidentStatusAction(incidentId: string, status: IncidentStatus): Promise<IncidentActionResult> {
+/** Who is acting, for incident history. */
+async function currentActor(): Promise<string> {
+  return (await getStaffUser())?.email ?? "staff";
+}
+
+/**
+ * Status actions: Mark Investigating, Snooze (with a duration), Expected Maintenance,
+ * Ignore, Resolve, Reopen.
+ */
+export async function setIncidentStatusAction(
+  incidentId: string,
+  status: IncidentStatus,
+  snoozeHours?: number,
+): Promise<IncidentActionResult> {
   if (!(await isStaffRequest())) return SIGNED_OUT;
   if (!SETTABLE_STATUSES.includes(status)) return { ok: false, message: "Unknown status." };
+  if (status === "snoozed" && !SNOOZE_HOURS.includes(snoozeHours as (typeof SNOOZE_HOURS)[number])) {
+    return { ok: false, message: "Choose how long to snooze." };
+  }
   const loaded = await loadIncidentState(incidentId);
   if ("ok" in loaded) return loaded;
   // Resolved incidents are history. If the problem returns, the engine opens a new one.
-  if (loaded.resolved) return { ok: false, message: "This incident is already closed." };
+  if (!isUnresolvedIncident(loaded.incident)) return { ok: false, message: "This incident is already closed." };
 
+  const now = Date.now();
+  const snoozedUntil = status === "snoozed" ? new Date(now + snoozeHours! * 3_600_000).toISOString() : null;
   const { error } = await getSupabase()
     .from("incidents")
-    .update({ status, resolved_at: status === "resolved" ? new Date().toISOString() : null })
+    .update({
+      status,
+      resolved_at: status === "resolved" ? new Date(now).toISOString() : null,
+      snoozed_until: snoozedUntil,
+    })
     .eq("id", incidentId);
   if (error) return { ok: false, message: `Could not update incident: ${error.message}` };
+
+  const message =
+    status === "snoozed"
+      ? `Snoozed for ${durationLabel(snoozeHours!)}`
+      : status === "resolved"
+        ? "Resolved"
+        : status === "open"
+          ? "Reopened"
+          : `Marked ${INCIDENT_STATUS_LABELS[status]}`;
+  await logIncidentEvent(incidentId, await currentActor(), status === "resolved" ? "resolved" : "status_changed", message);
   refresh();
-  return { ok: true, message: `Marked ${INCIDENT_STATUS_LABELS[status]}.` };
+  return { ok: true, message: `${message}.` };
 }
 
 /** Saves the assigned team and internal notes. Allowed on closed incidents too. */
@@ -147,6 +181,14 @@ export async function updateIncidentDetailsAction(
     .update({ assigned_team: team, internal_notes: cleanNotes })
     .eq("id", incidentId);
   if (error) return { ok: false, message: `Could not save: ${error.message}` };
+
+  const actor = await currentActor();
+  if (team !== loaded.incident.assigned_team) {
+    await logIncidentEvent(incidentId, actor, "assigned", `Assigned to ${TEAM_LABELS[team]}`);
+  }
+  if (cleanNotes !== loaded.incident.internal_notes.trim()) {
+    await logIncidentEvent(incidentId, actor, "notes_updated", "Updated internal notes");
+  }
   refresh();
   return { ok: true, message: "Saved." };
 }

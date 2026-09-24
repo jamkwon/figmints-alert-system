@@ -74,3 +74,12 @@ export function initials(name: string | null, email: string): string {
   const letters = parts.length > 1 ? parts[0][0] + parts[parts.length - 1][0] : source.slice(0, 2);
   return letters.toUpperCase();
 }
+
+/** "99.8%" from passed/total checks; null when there were no checks. */
+export function formatUptime(passed: number, checks: number): string | null {
+  if (checks === 0) return null;
+  const pct = (passed / checks) * 100;
+  if (pct === 100) return "100%";
+  // Never round a real failure up to 100%.
+  return `${Math.min(Math.floor(pct * 10) / 10, 99.9).toFixed(1)}%`;
+}

@@ -6,8 +6,8 @@ import { CheckHistoryTable } from "@/components/check-history-table";
 import { IncidentControls } from "@/components/incident-controls";
 import { IncidentStatusBadge, SeverityBadge, TeamLabel } from "@/components/status";
 import { Panel, PageHeader, When } from "@/components/ui";
-import { getAppData, getCheckHistory, type IncidentView } from "@/lib/data";
-import { displayUrl, formatDuration } from "@/lib/format";
+import { getAppData, getCheckHistory, getIncidentEvents, type IncidentView } from "@/lib/data";
+import { displayUrl, formatDateTime, formatDuration } from "@/lib/format";
 import { isUnresolvedIncident } from "@/lib/health";
 import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS } from "@/lib/labels";
 
@@ -46,9 +46,10 @@ export default async function IncidentDetailPage({ params }: PageProps<"/inciden
   if (!view) notFound();
 
   const { incident, client, website, monitor } = view;
-  const [history, data] = await Promise.all([
+  const [history, data, events] = await Promise.all([
     monitor ? getCheckHistory(monitor.id, RECENT_CHECKS) : Promise.resolve([]),
     getAppData(),
+    getIncidentEvents(incident.id),
   ]);
   const closed = !isUnresolvedIncident(incident);
   // The most recent failing check's error is the most useful clue.
@@ -109,6 +110,12 @@ export default async function IncidentDetailPage({ params }: PageProps<"/inciden
       <div className="mb-6 grid grid-cols-[3fr_2fr] items-start gap-6">
         <Panel title="Details">
           <dl>
+            {incident.status === "snoozed" && incident.snoozed_until && (
+              <DetailRow label="Snoozed until">
+                {formatDateTime(incident.snoozed_until)}{" "}
+                <span className="text-slate-500">(reopens automatically)</span>
+              </DetailRow>
+            )}
             <DetailRow label="Description">
               {incident.description || <span className="text-slate-400">None</span>}
             </DetailRow>
@@ -161,6 +168,28 @@ export default async function IncidentDetailPage({ params }: PageProps<"/inciden
           />
         </Panel>
       </div>
+
+      <Panel title="History" aside={`${events.length} event${events.length === 1 ? "" : "s"}`} className="mb-6">
+        {events.length === 0 ? (
+          <p className="px-4 py-4 text-sm text-slate-500">No history recorded yet.</p>
+        ) : (
+          <ol className="divide-y divide-slate-100">
+            {events.map((event) => (
+              <li key={event.id} className="flex gap-4 px-4 py-2.5 text-sm">
+                <div className="w-36 shrink-0">
+                  <When iso={event.created_at} />
+                </div>
+                <div>
+                  <div className="text-fig-ink">{event.message}</div>
+                  <div className="text-xs text-slate-500">
+                    {event.actor === "system" ? "Website Watch (automatic)" : event.actor}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ol>
+        )}
+      </Panel>
 
       {monitor && (
         <Panel title="Recent checks for this monitor" aside={`Latest ${history.length}`}>

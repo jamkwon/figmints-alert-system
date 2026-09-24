@@ -6,12 +6,11 @@ import {
   updateIncidentDetailsAction,
   type IncidentActionResult,
 } from "@/app/actions";
-import { TEAM_LABELS } from "@/lib/labels";
+import { SNOOZE_HOURS, TEAM_LABELS, durationLabel } from "@/lib/labels";
 import type { AssignedTeam, IncidentStatus } from "@/lib/types";
 
 const STATUS_ACTIONS: { status: IncidentStatus; label: string; primary?: boolean }[] = [
   { status: "investigating", label: "Mark Investigating" },
-  { status: "snoozed", label: "Snooze" },
   { status: "expected_maintenance", label: "Expected Maintenance" },
   { status: "ignored", label: "Ignore" },
   { status: "open", label: "Reopen" },
@@ -52,11 +51,11 @@ export function IncidentControls({
   const disabled = Boolean(disabledReason);
   const dirty = draftTeam !== team || draftNotes.trim() !== notes.trim();
 
-  function changeStatus(next: IncidentStatus) {
+  function changeStatus(next: IncidentStatus, snoozeHours?: number) {
     setStatusResult(null);
     startStatus(async () => {
       try {
-        setStatusResult(await setIncidentStatusAction(incidentId, next));
+        setStatusResult(await setIncidentStatusAction(incidentId, next, snoozeHours));
       } catch {
         setStatusResult({ ok: false, message: "Could not reach the server." });
       }
@@ -102,6 +101,26 @@ export function IncidentControls({
                 {action.label}
               </button>
             ))}
+          </div>
+        )}
+        {!closed && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-sm text-slate-600">{status === "snoozed" ? "Snooze again for" : "Snooze for"}</span>
+            {SNOOZE_HOURS.map((h) => (
+              <button
+                key={h}
+                type="button"
+                disabled={disabled || statusPending}
+                onClick={() => changeStatus("snoozed", h)}
+                className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-fig-ink hover:border-fig-plum hover:text-fig-plum disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {durationLabel(h)}
+              </button>
+            ))}
+          </div>
+        )}
+        {!closed && (
+          <div className="mt-2 min-h-5">
             {statusPending && <span className="text-xs text-slate-500">Updating…</span>}
             <Feedback result={statusResult} />
           </div>

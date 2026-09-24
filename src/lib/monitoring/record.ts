@@ -1,5 +1,12 @@
 import "server-only";
-import { decideIncident, type IncidentDecision } from "@/lib/monitoring/incident-engine";
+import { isInFuture } from "@/lib/format";
+import {
+  FAILURES_TO_OPEN,
+  SUCCESSES_TO_RESOLVE,
+  decideIncident,
+  type IncidentDecision,
+} from "@/lib/monitoring/incident-engine";
+import { SYSTEM_ACTOR, logIncidentEvent } from "@/lib/monitoring/incident-events";
 import { performHttpCheck } from "@/lib/monitoring/run-check";
 import { getSupabase } from "@/lib/supabase/server";
 import type { CheckResult, Incident, Monitor } from "@/lib/types";
@@ -74,26 +81,50 @@ async function applyIncidentRules(monitor: Monitor): Promise<IncidentDecision["k
       break;
 
     case "open": {
-      const website = await db.from("websites").select("client_id").eq("id", monitor.website_id).single();
+      const website = await db
+        .from("websites")
+        .select("client_id, maintenance_until")
+        .eq("id", monitor.website_id)
+        .single();
       if (website.error) throw new Error(`Failed to load website: ${website.error.message}`);
-      const insert = await db.from("incidents").insert({
-        ...decision.incident,
-        client_id: website.data.client_id,
-        website_id: monitor.website_id,
-        monitor_id: monitor.id,
-        status: "open",
-        assigned_team: "unassigned",
-      });
+      // During a maintenance window, record the problem without alerting anyone.
+      const inMaintenance = isInFuture(website.data.maintenance_until);
+      const insert = await db
+        .from("incidents")
+        .insert({
+          ...decision.incident,
+          client_id: website.data.client_id,
+          website_id: monitor.website_id,
+          monitor_id: monitor.id,
+          status: inMaintenance ? "expected_maintenance" : "open",
+          assigned_team: "unassigned",
+        })
+        .select("id")
+        .single();
       // Another check opened it at the same moment; that's fine.
-      if (insert.error && insert.error.code !== UNIQUE_VIOLATION) {
-        throw new Error(`Failed to open incident: ${insert.error.message}`);
-      }
+      if (insert.error && insert.error.code === UNIQUE_VIOLATION) break;
+      if (insert.error) throw new Error(`Failed to open incident: ${insert.error.message}`);
+      await logIncidentEvent(
+        insert.data.id,
+        SYSTEM_ACTOR,
+        "opened",
+        `Opened after ${FAILURES_TO_OPEN} consecutive failed checks (${decision.incident.severity})` +
+          (inMaintenance ? " during a maintenance window, so marked Expected Maintenance" : ""),
+      );
       break;
     }
 
     case "update": {
       const res = await db.from("incidents").update(decision.changes).eq("id", existing!.id);
       if (res.error) throw new Error(`Failed to update incident: ${res.error.message}`);
+      if (decision.changes.severity !== existing!.severity) {
+        await logIncidentEvent(
+          existing!.id,
+          SYSTEM_ACTOR,
+          "severity_changed",
+          `Severity raised from ${existing!.severity} to ${decision.changes.severity}`,
+        );
+      }
       break;
     }
 
@@ -105,6 +136,14 @@ async function applyIncidentRules(monitor: Monitor): Promise<IncidentDecision["k
         .update({ status, resolved_at: decision.resolvedAt })
         .eq("id", existing!.id);
       if (res.error) throw new Error(`Failed to resolve incident: ${res.error.message}`);
+      await logIncidentEvent(
+        existing!.id,
+        SYSTEM_ACTOR,
+        "resolved",
+        status === "ignored"
+          ? `Closed automatically after ${SUCCESSES_TO_RESOLVE} successful checks (was ignored)`
+          : `Resolved automatically after ${SUCCESSES_TO_RESOLVE} successful checks`,
+      );
       break;
     }
   }

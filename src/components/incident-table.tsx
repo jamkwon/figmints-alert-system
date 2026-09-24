@@ -2,7 +2,7 @@ import Link from "next/link";
 import { IncidentStatusBadge, SeverityBadge, TeamLabel } from "@/components/status";
 import { EmptyState, When, table } from "@/components/ui";
 import type { IncidentView } from "@/lib/data";
-import { formatDuration } from "@/lib/format";
+import { formatDateTime, formatDuration } from "@/lib/format";
 
 export function IncidentTable({
   incidents,
@@ -66,6 +66,11 @@ export function IncidentTable({
                 {incident.resolved_at && (
                   <div className="mt-1 text-xs whitespace-nowrap text-slate-500">
                     after {formatDuration(incident.first_detected_at, incident.resolved_at)}
+                  </div>
+                )}
+                {incident.status === "snoozed" && incident.snoozed_until && (
+                  <div className="mt-1 text-xs whitespace-nowrap text-slate-500">
+                    until {formatDateTime(incident.snoozed_until)}
                   </div>
                 )}
               </td>

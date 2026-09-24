@@ -12,6 +12,7 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 
 - **Phase 4 (scheduled monitoring): done.** One scheduled worker, triggered every 5 minutes by Supabase `pg_cron`, checks every monitor that is due according to its interval. See **Scheduled checks**.
 - **Staff login: done.** Google sign-in limited to `@figmints.com` accounts. See **Login**.
+- **Phase 5 (operational improvements): done.** Add/edit clients, websites and monitors in the app (with bulk monitor setup), filters, timed snooze, website maintenance windows, uptime percentages, incident history, and automatic check-history cleanup.
 
 Running checks and updating incidents require Supabase. On sample data those controls are disabled.
 
@@ -78,6 +79,7 @@ The schema lives in `supabase/migrations/`. Sample data lives in `supabase/seed.
    - `20260922000000_initial_schema.sql`
    - `20260923000000_incident_engine.sql` (Phase 3)
    - `20260924000000_scheduler.sql` (Phase 4)
+   - `20260925000000_operations.sql` (Phase 5)
 3. (Optional) Run `supabase/seed.sql` to load the 6 sample clients. You can re-run it safely; it replaces the earlier sample rows.
 4. Copy the project URL and the secret key into `.env.local`, then restart `npm run dev`.
 
@@ -101,8 +103,10 @@ For a local Supabase stack (requires Docker), run `npx supabase init` once, then
 | `websites` | One or more sites or environments per client (production / staging / development) |
 | `monitors` | What to check: type, target URL, expected status/text, interval, severity on failure |
 | `check_results` | One row per monitor run (status, HTTP code, response time, error, metadata) |
-| `incidents` | Meaningful problems: severity, status, team, timeline, internal notes |
+| `incidents` | Meaningful problems: severity, status, team, timeline, internal notes, snooze end |
+| `incident_events` | Incident history: who changed what, when (`system` for automatic changes) |
 | `monitor_check_summary` (view) | Latest check and last successful check per monitor ("last known good") |
+| `monitor_uptime` (view) | Passing checks / all checks per monitor over 24 hours, 7 days and 30 days |
 
 Row-level security is enabled on every table with **no policies**. The public anon/publishable key can read nothing; only the server's secret key has access.
 
@@ -115,7 +119,7 @@ Row-level security is enabled on every table with **no policies**. The public an
 | `npm start` | Serve the production build |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | Generate route types and run `tsc` |
-| `npm test` | Unit tests for health rules, check evaluation, incident rules, login rules and SSRF protection (Node's built-in test runner) |
+| `npm test` | Unit tests for health rules, check evaluation, incident rules, login rules, form validation and SSRF protection (Node's built-in test runner) |
 
 ## Project layout
 
@@ -125,13 +129,15 @@ src/
   app/
     (app)/              Signed-in pages: dashboard, clients, monitors, incidents, checks, settings
     login/, auth/       Sign-in page, Google sign-in and sign-out actions, OAuth callback
-    actions.ts          Server actions: Run check, Run due checks, incident status, team and notes
+    actions.ts          Server actions: Run check, Run due checks, incident status/snooze, team and notes
+    manage-actions.ts   Server actions: create/edit clients, websites, monitors; maintenance windows
     api/cron/run-checks Scheduler endpoint (called by Supabase pg_cron)
   components/           Sidebar, status badges, shared tables, Run check button, UI primitives
   lib/
     data.ts             Loads data (Supabase or sample) and builds view models
     auth/               Who may sign in (allowed.ts) and the staff check (session.ts)
     health.ts           Health rules: monitor → website → client roll-up
+    validation.ts       Form parsing/validation (SSRF-safe URLs, bulk monitor lines)
     monitoring/
       run-check.ts      Performs one HTTP check (redirects, timeout, body limit, error messages)
       evaluate.ts       Pure pass/fail rules for a check
@@ -167,22 +173,48 @@ Any monitor with *expected text* set also checks the text, whatever its type.
 - **Response time** covers the whole request, including redirects and downloading the page.
 - Running a check updates the monitor's `last_checked_at` and `next_check_at`. Manual runs of the same monitor are limited to one every 10 seconds.
 
-### Adding a real client and monitor
+## Managing clients, websites and monitors
 
-There's no "add monitor" screen yet. Until there is, add rows in the Supabase **SQL Editor**:
+Everything is managed in the app (Supabase must be connected):
 
-```sql
-with c as (
-  insert into clients (name, primary_website) values ('Acme Co', 'https://acme.com') returning id
-), w as (
-  insert into websites (client_id, name, url)
-  select id, 'Main site', 'https://acme.com' from c returning id
-)
-insert into monitors (website_id, name, monitor_type, target_url, expected_text, interval_minutes, severity_on_failure)
-select id, 'Contact Page', 'expected_content', 'https://acme.com/contact', 'Contact Us', 15, 'critical' from w;
-```
+- **Add a client:** **Clients → Add client**. Enter the name and main website, and list the pages to monitor, one per line. This creates the client, its production website and all the monitors in one go.
+- **Add monitors in bulk:** a client page → **Add monitors**. Pick a website and list pages:
+  ```
+  /
+  /contact | Contact Us
+  /services
+  https://shop.example.com/cart
+  ```
+  - A path is relative to the website. A full URL can point anywhere public.
+  - Text after `|` makes it an **Expected Content** monitor that checks for that text. Without it, you get an **HTTP Status** monitor.
+  - Names come from the path, e.g. `/free-estimate` becomes "Free Estimate Page". You can rename them afterwards.
+  - Up to 25 lines at a time. New monitors are checked within 5 minutes.
+- **Edit or pause a monitor:** the monitor's page → **Edit monitor**. Change its type, URL, expected status or text, response-time limit, interval or severity. Untick **Active** to pause it; re-activating makes it due right away.
+- **Websites:** a client page → **Add website** (e.g. staging) or **Edit** next to a website. Untick **Active** to stop checking it.
+- **Deactivate a client:** **Edit client** → untick **Active**. Its history is kept.
 
-Then open **Checks**, click the monitor, and press **Run check**.
+All URLs go through the same SSRF rules as the checks. Private addresses, `localhost`, unusual ports and non-http(s) URLs are rejected when you save.
+
+### Maintenance windows
+
+On a client page, each website has **Start maintenance** (1 hour, 4 hours, 24 hours, 3 days or 7 days, plus an optional note). While the window is open:
+
+- Checks keep running, so the history stays complete.
+- New incidents open as **Expected Maintenance** instead of alerting, and stay out of **Needs attention**.
+- The client shows an "In maintenance" tag.
+
+**End maintenance** closes it early. When it ends, new problems alert as usual. Incidents opened during the window stay as they are until resolved.
+
+### Uptime
+
+Uptime is the share of passing checks, from the `monitor_uptime` view:
+
+- **Monitor page:** last 24 hours, 7 days and 30 days.
+- **Monitor tables and the Clients list:** 7 days.
+- **Client page:** 7 days across the client's active monitors.
+- **Dashboard:** overall 7-day figure.
+
+A slow (warning) check counts as not passing. Uptime is rounded down, so a real failure never shows as 100%.
 
 ## How incidents work
 
@@ -205,11 +237,25 @@ An incident is a confirmed problem, not a single failed request. After every che
 
 On an incident's page (click any incident title):
 
-- **Status:** Mark Investigating, Snooze, Expected Maintenance, Ignore, Reopen, Resolve. A resolved incident is history and can't be reopened. If the problem returns, a new incident opens automatically.
+- **Status:** Mark Investigating, Expected Maintenance, Ignore, Reopen, Resolve. A resolved incident is history and can't be reopened. If the problem returns, a new incident opens automatically.
+- **Snooze for** 1 hour, 4 hours, 24 hours or 7 days. When the time is up, the scheduler reopens it as **Open**, and it's back on the Dashboard.
 - **Assigned team:** Development, Account Management, SEO, Ads, Client or Unassigned.
 - **Internal notes:** free text, up to 5,000 characters. Editable even after an incident is closed.
 
-Snoozed and Expected Maintenance incidents drop out of **Needs attention** and show as informational (gray). Snoozing doesn't expire yet (see Phase 5).
+Snoozed and Expected Maintenance incidents drop out of **Needs attention** and show as informational (gray).
+
+### Incident history
+
+Each incident page has a **History** timeline. It records who (staff email, or *Website Watch (automatic)*) did what and when:
+- **Automatic:** opened, severity raised, resolved, snooze ended.
+- **By staff:** status changes, snoozes, team assignment, note edits.
+
+### Filters
+
+- **Incidents:** client, severity, team, plus the Active / Resolved & ignored / All tabs.
+- **Clients:** name or website search, and health (needs attention, healthy, maintenance/no data, inactive).
+
+Filters are part of the URL, so a filtered view can be bookmarked or shared.
 
 ## How health is determined
 
@@ -225,6 +271,7 @@ One scheduled worker checks every monitor that's due. There are no per-website c
 2. The endpoint **claims** up to 20 due monitors with the `claim_due_monitors` database function. "Due" means active monitor, website and client, with *next check* now or within the next minute. Claiming locks those monitors for 5 minutes, so overlapping or duplicate calls never check the same monitor twice.
 3. It checks them 5 at a time. Each check is saved, incident rules are applied, and *next check* is set to now + the monitor's interval.
 4. If time runs short (40 s), the remaining claimed monitors are picked up by the next run. With more than 20 due monitors, the backlog drains over the following runs.
+5. **Housekeeping:** every run reopens snoozes that have expired. Once an hour, it deletes check results older than **90 days**.
 
 **Intervals:** 5 min, 15 min, 30 min, 1 hour, 6 hours, or daily (enforced by the database). A new monitor with no *next check* is due right away.
 

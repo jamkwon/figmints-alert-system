@@ -15,6 +15,8 @@ import { buildSampleData } from "@/lib/sample-data";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
 import type {
   CheckResult,
+  IncidentEvent,
+  MonitorUptime,
   Client,
   Incident,
   Monitor,
@@ -42,7 +44,7 @@ const loadSnapshot = cache(async (): Promise<Snapshot> => {
   if (!isSupabaseConfigured()) return loadSampleData().snapshot;
 
   const db = getSupabase();
-  const [clients, websites, monitors, summaries, incidents] = await Promise.all([
+  const [clients, websites, monitors, summaries, incidents, uptime] = await Promise.all([
     db.from("clients").select("*").order("name"),
     db.from("websites").select("*").order("name"),
     db.from("monitors").select("*").order("name"),
@@ -52,9 +54,10 @@ const loadSnapshot = cache(async (): Promise<Snapshot> => {
       .select("*")
       .order("first_detected_at", { ascending: false })
       .limit(INCIDENT_LIMIT),
+    db.from("monitor_uptime").select("*"),
   ]);
 
-  for (const [table, result] of Object.entries({ clients, websites, monitors, summaries, incidents })) {
+  for (const [table, result] of Object.entries({ clients, websites, monitors, summaries, incidents, uptime })) {
     if (result.error) throw new Error(`Failed to load ${table}: ${result.error.message}`);
   }
 
@@ -64,6 +67,16 @@ const loadSnapshot = cache(async (): Promise<Snapshot> => {
     monitors: monitors.data as Monitor[],
     summaries: summaries.data as MonitorCheckSummary[],
     incidents: incidents.data as Incident[],
+    // Postgres count() arrives as a string over the API; normalize to numbers.
+    uptime: (uptime.data as Record<string, string | number>[]).map((row) => ({
+      monitor_id: String(row.monitor_id),
+      checks_24h: Number(row.checks_24h),
+      passed_24h: Number(row.passed_24h),
+      checks_7d: Number(row.checks_7d),
+      passed_7d: Number(row.passed_7d),
+      checks_30d: Number(row.checks_30d),
+      passed_30d: Number(row.passed_30d),
+    })),
   };
 });
 
@@ -78,6 +91,7 @@ export interface MonitorView {
   activeIncident: Incident | undefined;
   /** Any not-yet-resolved incident, including ignored ones. */
   unresolvedIncident: Incident | undefined;
+  uptime: MonitorUptime | undefined;
 }
 
 export interface WebsiteView {
@@ -100,6 +114,8 @@ export interface ClientView {
   incidents: IncidentView[];
   activeIncidents: IncidentView[];
   lastCheckedAt: string | null;
+  /** Passing checks / all checks over 7 days, across the client's active monitors. */
+  uptime7d: { passed: number; checks: number };
 }
 
 export interface AppData {
@@ -142,6 +158,7 @@ function buildAppData(s: Snapshot): Omit<AppData, "source" | "loadedAt"> {
   const websiteById = new Map(s.websites.map((w) => [w.id, w]));
   const monitorById = new Map(s.monitors.map((m) => [m.id, m]));
   const summaryByMonitor = new Map(s.summaries.map((x) => [x.monitor_id, x]));
+  const uptimeByMonitor = new Map(s.uptime.map((x) => [x.monitor_id, x]));
   const incidentsByMonitor = groupBy(s.incidents, (i) => i.monitor_id);
 
   const monitors: MonitorView[] = [];
@@ -163,6 +180,7 @@ function buildAppData(s: Snapshot): Omit<AppData, "source" | "loadedAt"> {
       ),
       activeIncident: monitorIncidents.find(isActiveIncident),
       unresolvedIncident: monitorIncidents.find(isUnresolvedIncident),
+      uptime: uptimeByMonitor.get(monitor.id),
     });
   }
 
@@ -207,6 +225,12 @@ function buildAppData(s: Snapshot): Omit<AppData, "source" | "loadedAt"> {
         incidents: clientIncidents,
         activeIncidents: clientIncidents.filter((i) => isActiveIncident(i.incident)),
         lastCheckedAt: latest(clientMonitors.map((m) => m.monitor.last_checked_at)),
+        uptime7d: clientMonitors
+          .filter((m) => m.monitor.active)
+          .reduce(
+            (sum, m) => ({ passed: sum.passed + (m.uptime?.passed_7d ?? 0), checks: sum.checks + (m.uptime?.checks_7d ?? 0) }),
+            { passed: 0, checks: 0 },
+          ),
       };
     })
     .sort((a, b) => compareHealth(a.health, b.health) || a.client.name.localeCompare(b.client.name));
@@ -272,4 +296,21 @@ export async function getSchedulerStatus(): Promise<SchedulerStatus> {
     nextDue: upcoming[0] ?? null,
     lastCheck: checked.at(-1) ?? null,
   };
+}
+
+/** Incident history, newest first. */
+export async function getIncidentEvents(incidentId: string): Promise<IncidentEvent[]> {
+  await requireStaff();
+  await connection();
+  if (!isSupabaseConfigured()) {
+    return loadSampleData().events.filter((e) => e.incident_id === incidentId);
+  }
+  const { data, error } = await getSupabase()
+    .from("incident_events")
+    .select("*")
+    .eq("incident_id", incidentId)
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (error) throw new Error(`Failed to load incident history: ${error.message}`);
+  return data as IncidentEvent[];
 }

@@ -47,3 +47,21 @@ export function formatInterval(minutes: number): string {
   if (minutes % 60 === 0) return minutes === 60 ? "Hourly" : `Every ${minutes / 60} hours`;
   return `Every ${minutes} min`;
 }
+
+/** Snooze durations offered on incidents. */
+export const SNOOZE_HOURS = [1, 4, 24, 168] as const;
+
+/** Maintenance window lengths offered on websites. */
+export const MAINTENANCE_HOURS = [1, 4, 24, 72, 168] as const;
+
+/** "1 hour", "4 hours", "24 hours", "3 days", "7 days". */
+export function durationLabel(hours: number): string {
+  if (hours % 24 === 0) return hours === 24 ? "24 hours" : `${hours / 24} days`;
+  return `${hours} hour${hours === 1 ? "" : "s"}`;
+}
+
+// Allowed values for forms. Kept here (no server imports) so client components can use them.
+export const INTERVALS = [5, 15, 30, 60, 360, 1440] as const;
+export const MONITOR_TYPES: readonly MonitorType[] = ["http_status", "expected_content", "response_time"];
+export const SEVERITIES: readonly Severity[] = ["critical", "warning", "informational"];
+export const ENVIRONMENTS: readonly Environment[] = ["production", "staging", "development"];

@@ -5,9 +5,9 @@ import type { ReactNode } from "react";
 import { CheckHistoryTable } from "@/components/check-history-table";
 import { RunCheckButton } from "@/components/run-check-button";
 import { CheckStatusBadge, HealthBadge, IncidentStatusBadge, SeverityBadge } from "@/components/status";
-import { Panel, PageHeader, When } from "@/components/ui";
+import { LinkButton, Panel, PageHeader, When } from "@/components/ui";
 import { getAppData, getCheckHistory, type MonitorView } from "@/lib/data";
-import { displayUrl, formatDateTime, isInFuture, timeAgo } from "@/lib/format";
+import { displayUrl, formatDateTime, formatUptime, isInFuture, timeAgo } from "@/lib/format";
 import { failingSince } from "@/lib/health";
 import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS, SEVERITY_LABELS, formatInterval } from "@/lib/labels";
 import { DEFAULT_MAX_RESPONSE_TIME_MS } from "@/lib/monitoring/evaluate";
@@ -46,7 +46,12 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
   const view = await findMonitor((await params).id);
   if (!view) notFound();
 
-  const { monitor, website, client, summary, health, activeIncident } = view;
+  const { monitor, website, client, summary, health, activeIncident, uptime } = view;
+  const uptimeRows = [
+    { label: "Last 24 hours", passed: uptime?.passed_24h ?? 0, checks: uptime?.checks_24h ?? 0 },
+    { label: "Last 7 days", passed: uptime?.passed_7d ?? 0, checks: uptime?.checks_7d ?? 0 },
+    { label: "Last 30 days", passed: uptime?.passed_30d ?? 0, checks: uptime?.checks_30d ?? 0 },
+  ];
   const [history, data] = await Promise.all([getCheckHistory(monitor.id, HISTORY_LIMIT), getAppData()]);
   const since = failingSince(history);
 
@@ -73,7 +78,12 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
             {displayUrl(monitor.target_url)} ↗
           </a>
         }
-        actions={<RunCheckButton monitorId={monitor.id} disabledReason={disabledReason} />}
+        actions={
+          <>
+            <LinkButton href={`/monitors/${monitor.id}/edit`}>Edit monitor</LinkButton>
+            <RunCheckButton monitorId={monitor.id} disabledReason={disabledReason} />
+          </>
+        }
       />
 
       <div className="mb-6 grid grid-cols-4 gap-4">
@@ -130,37 +140,52 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
           <CheckHistoryTable checks={history} />
         </Panel>
 
-        <Panel title="Configuration">
-          <dl>
-            <ConfigRow label="Type">{MONITOR_TYPE_LABELS[monitor.monitor_type]}</ConfigRow>
-            <ConfigRow label="Website">
-              {displayUrl(website.url)} · {ENVIRONMENT_LABELS[website.environment]}
-            </ConfigRow>
-            <ConfigRow label="Expected status">
-              {monitor.expected_status_code ?? <span className="text-slate-500">200–399 (default)</span>}
-            </ConfigRow>
-            <ConfigRow label="Expected text">
-              {monitor.expected_text ? `“${monitor.expected_text}”` : <span className="text-slate-500">None</span>}
-            </ConfigRow>
-            {monitor.monitor_type === "response_time" && (
-              <ConfigRow label="Max response time">
-                {monitor.max_response_time_ms ?? `${DEFAULT_MAX_RESPONSE_TIME_MS} (default)`} ms
+        <div className="space-y-6">
+          <Panel title="Uptime">
+            <dl>
+              {uptimeRows.map((row) => (
+                <ConfigRow key={row.label} label={row.label}>
+                  <span className="font-semibold">{formatUptime(row.passed, row.checks) ?? "—"}</span>{" "}
+                  <span className="text-xs text-slate-500">
+                    {row.checks > 0 ? `${row.passed} of ${row.checks} checks passed` : "no checks"}
+                  </span>
+                </ConfigRow>
+              ))}
+            </dl>
+          </Panel>
+
+          <Panel title="Configuration">
+            <dl>
+              <ConfigRow label="Type">{MONITOR_TYPE_LABELS[monitor.monitor_type]}</ConfigRow>
+              <ConfigRow label="Website">
+                {displayUrl(website.url)} · {ENVIRONMENT_LABELS[website.environment]}
               </ConfigRow>
-            )}
-            <ConfigRow label="Interval">{formatInterval(monitor.interval_minutes)}</ConfigRow>
-            <ConfigRow label="Next check">
-              {!monitor.active ? (
-                <span className="text-slate-500">Paused</span>
-              ) : isInFuture(monitor.next_check_at) ? (
-                <When iso={monitor.next_check_at} />
-              ) : (
-                <span className="text-slate-500">Due now (next scheduler run)</span>
+              <ConfigRow label="Expected status">
+                {monitor.expected_status_code ?? <span className="text-slate-500">200–399 (default)</span>}
+              </ConfigRow>
+              <ConfigRow label="Expected text">
+                {monitor.expected_text ? `“${monitor.expected_text}”` : <span className="text-slate-500">None</span>}
+              </ConfigRow>
+              {monitor.monitor_type === "response_time" && (
+                <ConfigRow label="Max response time">
+                  {monitor.max_response_time_ms ?? `${DEFAULT_MAX_RESPONSE_TIME_MS} (default)`} ms
+                </ConfigRow>
               )}
-            </ConfigRow>
-            <ConfigRow label="Severity on failure">{SEVERITY_LABELS[monitor.severity_on_failure]}</ConfigRow>
-            <ConfigRow label="Active">{monitor.active ? "Yes" : "No (paused)"}</ConfigRow>
-          </dl>
-        </Panel>
+              <ConfigRow label="Interval">{formatInterval(monitor.interval_minutes)}</ConfigRow>
+              <ConfigRow label="Next check">
+                {!monitor.active ? (
+                  <span className="text-slate-500">Paused</span>
+                ) : isInFuture(monitor.next_check_at) ? (
+                  <When iso={monitor.next_check_at} />
+                ) : (
+                  <span className="text-slate-500">Due now (next scheduler run)</span>
+                )}
+              </ConfigRow>
+              <ConfigRow label="Severity on failure">{SEVERITY_LABELS[monitor.severity_on_failure]}</ConfigRow>
+              <ConfigRow label="Active">{monitor.active ? "Yes" : "No (paused)"}</ConfigRow>
+            </dl>
+          </Panel>
+        </div>
       </div>
     </>
   );
