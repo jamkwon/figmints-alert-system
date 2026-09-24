@@ -100,6 +100,8 @@ export interface Incident {
   internal_notes: string;
   /** Snoozed incidents reopen when this passes. */
   snoozed_until: string | null;
+  /** When the Slack alert for this incident went out (at most once). */
+  alerted_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -111,7 +113,9 @@ export type IncidentEventKind =
   | "assigned"
   | "notes_updated"
   | "resolved"
-  | "snooze_ended";
+  | "snooze_ended"
+  | "alert_sent"
+  | "alert_failed";
 
 export interface IncidentEvent {
   id: string;

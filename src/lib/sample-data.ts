@@ -260,6 +260,7 @@ export function buildSampleData(now: Date = new Date()): {
       assigned_team: team,
       internal_notes: notes,
       snoozed_until: null,
+      alerted_at: null,
       created_at: ago(firstMin),
       updated_at: ago(lastMin),
     };
