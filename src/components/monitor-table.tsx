@@ -23,10 +23,18 @@ function LastResult({ view }: { view: MonitorView }) {
   const wp = view.monitor.monitor_type === "wordpress_health" ? wordpressInfo(s.last_metadata) : null;
   if (wp) {
     const behind = wp.version && wp.latest && compareVersions(wp.version, wp.latest) < 0;
+    // Only the site plugin knows about every update.
+    const pluginUpdates = wp.report ? wp.plugins.filter((p) => p.latest).length : 0;
     return (
       <div className="text-xs text-slate-600">
         {wp.version ? <>WordPress {wp.version}</> : "WordPress version hidden"}
         {behind && <span className="text-amber-700"> ({wp.latest} available)</span>}
+        {pluginUpdates > 0 && (
+          <span className="text-amber-700">
+            {" "}
+            · {pluginUpdates} plugin update{pluginUpdates === 1 ? "" : "s"}
+          </span>
+        )}
         {wp.wpengine?.last_backup_at && <> · backup {timeAgo(wp.wpengine.last_backup_at)}</>}
         {wp.problems.some((p) => p.level === "critical") && (
           <div className="mt-0.5 text-red-700">{wp.problems.filter((p) => p.level === "critical").map((p) => p.message).join("; ")}</div>

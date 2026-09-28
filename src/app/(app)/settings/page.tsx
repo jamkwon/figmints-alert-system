@@ -13,6 +13,7 @@ import { SSL_FAILURE_DAYS, SSL_WARNING_DAYS } from "@/lib/monitoring/evaluate";
 import { MAX_LINKS } from "@/lib/monitoring/links";
 import { BACKUP_MAX_AGE_HOURS } from "@/lib/monitoring/wordpress";
 import { checkWpeConnection } from "@/lib/monitoring/wpengine";
+import { WP_PLUGIN_VERSION, WP_PLUGIN_ZIP, pluginKey } from "@/lib/monitoring/wp-plugin";
 import { RETENTION_DAYS } from "@/lib/monitoring/scheduler";
 import { appUrl, slackWebhookUrl } from "@/lib/notify/send";
 import { supabaseEnvStatus } from "@/lib/supabase/server";
@@ -63,6 +64,7 @@ export default async function SettingsPage() {
 
   const { dueNow, nextDue, lastCheck } = await getSchedulerStatus();
   const slackConfigured = slackWebhookUrl() !== null;
+  const pluginKeySet = pluginKey() !== null;
   const wpe = source === "sample" ? { ok: false, message: "Not configured" } : await checkWpeConnection();
   const alertLinkBase = appUrl();
 
@@ -196,10 +198,44 @@ export default async function SettingsPage() {
         </dl>
       </Panel>
 
+      <Panel title="WordPress plugin" className="mt-6">
+        <dl>
+          <Row label="Signing key">
+            {pluginKeySet ? (
+              <HealthBadge health="healthy" label="Set" />
+            ) : (
+              <span className="flex items-center gap-2">
+                <HealthBadge health="unknown" label="Not set up" />
+                <span className="text-xs text-slate-500">
+                  Set WEBSITE_WATCH_PLUGIN_KEY or WEBSITE_WATCH_PLUGIN_TOKEN (64 hex characters). See README → WordPress
+                  plugin.
+                </span>
+              </span>
+            )}
+          </Row>
+          <Row label="What it adds">
+            A read-only plugin for each site. WordPress Health checks then see every plugin and theme with its
+            available update (premium included), exact WordPress and PHP versions, debug mode and WP-Cron.
+          </Row>
+          {pluginKeySet && (
+            <Row label="Download">
+              <a href="/wordpress-plugin" className="text-fig-plum hover:underline">
+                {WP_PLUGIN_ZIP}
+              </a>{" "}
+              <span className="text-xs text-slate-500">
+                (version {WP_PLUGIN_VERSION}, with this key&apos;s public half built in. In WordPress: Plugins → Add New
+                Plugin → Upload Plugin, then Activate.)
+              </span>
+            </Row>
+          )}
+        </dl>
+      </Panel>
+
       <Panel title="Scheduled checks" className="mt-6">
         <dl>
           <Row label="Scheduler">
-            Every 5 minutes via Supabase <code>pg_cron</code>. It checks only monitors that are due.{" "}
+            Supabase <code>pg_cron</code>, every minute (or every 5 on older setups). It checks only monitors that are
+            due.{" "}
             <span className="text-slate-500">Setup: README → Scheduled checks.</span>
           </Row>
           <Row label="CRON_SECRET">

@@ -254,7 +254,7 @@ export function buildSampleData(now: Date = new Date()): {
 
   monitor(18, 3, "WordPress Health", "wordpress_health", "https://bluefinchbakery.example/",
     { interval: 360, severity: "critical", passingLatestMin: 400,
-      failures: fails("warning", 200, "WordPress 7.0.5 (latest is 7.1.2); 1 plugin with updates available", [[30, 2100]]) });
+      failures: fails("warning", 200, "WordPress 7.0.5 (latest is 7.1.2); 2 plugins with updates available", [[30, 2100]]) });
   monitor(19, 2, "WordPress Health", "wordpress_health", "https://northgatetitle.example/",
     { interval: 360, severity: "critical", passingLatestMin: 380,
       failures: fails("failed", 200, "Latest backup was aborted", [[20, 1900]]) });
@@ -263,16 +263,30 @@ export function buildSampleData(now: Date = new Date()): {
     if (!blueFinch && check.monitor_id !== mid(19)) continue;
     const backupAt = ago(blueFinch ? 360 : 1500);
     check.metadata = {
-      wordpress: { version: blueFinch ? "7.0.5" : "7.1.2", latest: "7.1.2", source: "wpengine" },
-      php_version: blueFinch ? "8.3" : "8.2",
+      // Blue Finch has the Website Watch plugin installed; Northgate relies on public signals.
+      wordpress: { version: blueFinch ? "7.0.5" : "7.1.2", latest: "7.1.2", source: blueFinch ? "plugin" : "wpengine" },
+      php_version: blueFinch ? "8.3.14" : "8.2",
       themes: blueFinch ? ["kadence"] : ["astra"],
       plugins: blueFinch
         ? [
-            { slug: "woocommerce", version: "10.1.2", latest: "10.1.2", source: "asset" },
-            { slug: "wordpress-seo", version: "28.1", latest: "28.5", source: "asset" },
-            { slug: "gravityforms", version: "2.10.2", latest: null, source: "asset" },
+            { slug: "gravityforms", name: "Gravity Forms", version: "2.10.2", latest: "2.10.4", source: "plugin", active: true },
+            { slug: "hello-dolly", name: "Hello Dolly", version: "1.7.2", latest: null, source: "plugin", active: false },
+            { slug: "woocommerce", name: "WooCommerce", version: "10.1.2", latest: null, source: "plugin", active: true },
+            { slug: "wordpress-seo", name: "Yoast SEO", version: "28.1", latest: "28.5", source: "plugin", active: true },
           ]
         : [{ slug: "wordpress-seo", version: null, latest: null, source: "rest" }],
+      plugin_report: blueFinch
+        ? {
+            plugin_version: "1.0.0",
+            generated_at: check.checked_at,
+            updates_checked_at: ago(300),
+            memory_limit: "256M",
+            debug_display: false,
+            cron_overdue_minutes: 0,
+            themes: [{ slug: "kadence", name: "Kadence", version: "1.2.9", latest: null, active: true }],
+          }
+        : null,
+      plugin_note: blueFinch ? "Reported by the Website Watch plugin" : "Website Watch plugin not installed or not active",
       wpengine: {
         install: blueFinch ? "bluefinchprod" : "northgateprod",
         environment: "production",
@@ -287,7 +301,7 @@ export function buildSampleData(now: Date = new Date()): {
         : blueFinch
           ? [
               { level: "warning", message: "WordPress 7.0.5 (latest is 7.1.2)" },
-              { level: "warning", message: "1 plugin with updates available" },
+              { level: "warning", message: "2 plugins with updates available" },
             ]
           : [{ level: "critical", message: "Latest backup was aborted" }],
     };
