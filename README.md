@@ -18,6 +18,7 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 - **Phase 8: broken link scans done.** A *Broken Links* monitor scans a page's links, images, stylesheets and scripts. See **Broken link scans**.
 - **Phase 8: tracking tag checks done.** A *Tracking Tags* monitor makes sure GTM, GA4, Google Ads, Meta Pixel, LinkedIn Insight and HubSpot tags stay on a page. See **Tracking tags**.
 - **Phase 7 (WordPress / WP Engine), Stage A: done.** A *WordPress Health* monitor checks WordPress and PHP versions, visible plugins, and WP Engine install status and backups. See **WordPress health**. Evaluation: `docs/phase-7-wordpress-evaluation.md`.
+- **Phase 7: import from WP Engine done.** **Clients → Import from WP Engine** adds production sites from WP Engine as clients, with uptime, SSL and WordPress checks. See **Importing sites from WP Engine**.
 
 Running checks and updating incidents require Supabase. On sample data those controls are disabled.
 
@@ -158,7 +159,8 @@ src/
       links.ts          Broken link scans: which links to check, what counts as broken
       tracking.ts       Tracking tag detection (GTM, GA4, Google Ads, Meta, LinkedIn, HubSpot)
       wordpress.ts      WordPress detection, version compare, backup/PHP rules
-      wpengine.ts       WP Engine API client (read-only: installs, backups)
+      wpengine.ts       WP Engine API client (read-only: sites, installs, backups)
+      wpengine-import.ts  Which WP Engine installs aren't monitored yet (import page)
       url-safety.ts     SSRF protection
       incident-engine.ts Pure rules: when to open, update or resolve an incident
       record.ts         Runs a check, saves the result, applies incident rules
@@ -255,7 +257,19 @@ A **WordPress Health** monitor combines three sources:
 4. Add `WPENGINE_API_USER` and `WPENGINE_API_PASSWORD` in Vercel (Production, **Sensitive**), and in `.env.local` for local use. Redeploy.
 5. **Settings → WP Engine** should say *Connected · N installs*. Installs are matched to websites by domain automatically (the primary domain, ignoring `www.`, or the `*.wpengine.com` address).
 
-Website Watch only **reads** from WP Engine: it lists installs and backups. It never creates backups or changes anything.
+Website Watch only **reads** from WP Engine: it lists sites, installs and backups. It never creates backups or changes anything.
+
+#### Importing sites from WP Engine
+
+**Clients → Import from WP Engine** (also linked from **Settings → WP Engine**) lists every **production** install:
+
+- **Ticked by default:** installs with a real domain that aren't monitored yet. Installs with only a `*.wpengine.com` / `*.wpenginepowered.com` address (usually not launched) and sandbox sites are listed but unticked. Search and **Select all shown / Clear shown** help with the rest.
+- **Client name:** starts as the WP Engine site name, which is often a short internal name. Edit it before importing. If a client with that name already exists, the site is added to it.
+- **Already monitored:** installs whose domain (or `*.wpengine.com` address) matches an existing website are hidden, and can't be imported twice.
+- **Checks added to each site:** homepage uptime (interval of your choice), SSL certificate and WordPress health (every 6 hours), with the severity you pick. First checks are spread over each interval, so the scheduler isn't flooded.
+- The page shows how many **scheduled checks a day** the import adds, and warns when that's more than the scheduler can run (see **Checking many sites**).
+
+Domains always come from WP Engine on the server, never from the form, and go through the same URL safety rules as every other check.
 
 ### Tracking tags
 
@@ -380,6 +394,21 @@ One scheduled worker checks every monitor that's due. There are no per-website c
 4. **If production uses Vercel Authentication** (Deployment Protection → *All Deployments*): Deployment Protection → **Protection Bypass for Automation** → create a secret. Scheduled calls come from Supabase, not a logged-in user, so they need it.
 5. **Schedule it:** open `supabase/setup/schedule-checks.sql`, replace the three placeholders (production URL, `CRON_SECRET`, bypass secret), and run it in the Supabase SQL Editor. The values are stored encrypted in Supabase Vault. Don't commit a filled-in copy.
 6. **Verify:** within 5 minutes, **Settings → Scheduled checks** should show a recent *Most recent check*, and monitors should show *Next check* times. The bottom of `schedule-checks.sql` has queries for troubleshooting (run history, HTTP responses).
+
+### Checking many sites
+
+Each run checks up to 20 monitors. Every 5 minutes that's about **5,760 checks a day**; every minute, about **28,800**. A monitor every 15 minutes uses 96 a day, every 6 hours 4.
+
+For more than ~50 sites, run the scheduler **every minute** by running this once in the Supabase SQL Editor (it only changes the schedule):
+
+```sql
+select cron.alter_job(
+  (select jobid from cron.job where jobname = 'website-watch-run-checks'),
+  schedule => '* * * * *'
+);
+```
+
+Runs never overlap on the same monitor (see *claims* above), so this is safe. **Import from WP Engine** shows the expected load before you import.
 
 **Settings → Run due checks now** runs the same worker immediately, which is useful for testing or catching up. For local development you can also call the endpoint directly:
 

@@ -5,6 +5,8 @@ import { redirect } from "next/navigation";
 import { isStaffRequest } from "@/lib/auth/session";
 import { detectTrackingOnPage } from "@/lib/monitoring/run-check";
 import { MAINTENANCE_HOURS } from "@/lib/labels";
+import { MAX_IMPORT, buildCandidates, monitorsForImport } from "@/lib/monitoring/wpengine-import";
+import { listInstalls, listSites } from "@/lib/monitoring/wpengine";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
 import type { Monitor, Website } from "@/lib/types";
 import {
@@ -405,5 +407,75 @@ export async function saveMonitorAction(_prev: FormState, formData: FormData): P
       .eq("id", id);
     fail("save monitor", error);
     return `/monitors/${id}`;
+  });
+}
+
+// Import from WP Engine ------------------------------------------------------------
+
+/** Creates clients, websites and monitors for the ticked WP Engine installs. */
+export async function importFromWpeAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return handle(async () => {
+    const ids = new Set(formData.getAll("install").map(String));
+    if (ids.size === 0) throw new ValidationError("install", "Tick at least one site to import.");
+    if (ids.size > MAX_IMPORT) throw new ValidationError("install", `Import at most ${MAX_IMPORT} sites at a time.`);
+    const uptime = parseCheckbox(formData.get("uptime"));
+    const ssl = parseCheckbox(formData.get("ssl"));
+    const wordpress = parseCheckbox(formData.get("wordpress"));
+    if (!uptime && !ssl && !wordpress) throw new ValidationError("checks", "Choose at least one check to add.");
+    const interval = parseInterval(formData.get("interval_minutes") ?? 15);
+    const severity = parseSeverity(formData.get("severity_on_failure") ?? "critical");
+
+    // Domains come from WP Engine again, never from the form.
+    const db = getSupabase();
+    const [installs, sites, websites, clients] = await Promise.all([
+      listInstalls(),
+      listSites(),
+      db.from("websites").select("url, client_id"),
+      db.from("clients").select("id, name"),
+    ]);
+    fail("load websites", websites.error);
+    fail("load clients", clients.error);
+    const clientNames = new Map(clients.data!.map((c) => [c.id as string, c.name as string]));
+    const candidates = buildCandidates(
+      installs,
+      sites,
+      websites.data!.map((w) => ({ url: w.url as string, clientName: clientNames.get(w.client_id as string) ?? "" })),
+      [...clientNames.values()],
+    );
+    const chosen = candidates.filter((c) => ids.has(c.installId) && !c.monitoredBy);
+    if (chosen.length === 0) throw new ValidationError("install", "Those sites are already monitored.");
+
+    // Validate every name and URL before writing anything.
+    const rows = chosen.map((c) => {
+      const name = parseName(formData.get(`name_${c.installId}`) ?? c.siteName, "name", `Client name for ${c.domain}`);
+      return { key: name.toLowerCase(), name, url: parseUrl(c.url)! };
+    });
+
+    // Clients: reuse one with the same name, otherwise create it.
+    const clientIds = new Map([...clientNames].map(([id, name]) => [name.trim().toLowerCase(), id]));
+    const newClients = new Map(rows.filter((r) => !clientIds.has(r.key)).map((r) => [r.key, r]));
+    if (newClients.size) {
+      const created = await db
+        .from("clients")
+        .insert([...newClients.values()].map((r) => ({ name: r.name, primary_website: r.url })))
+        .select("id, name");
+      fail("create clients", created.error);
+      for (const c of created.data!) clientIds.set((c.name as string).trim().toLowerCase(), c.id as string);
+    }
+
+    const created = await db
+      .from("websites")
+      .insert(
+        rows.map((r) => ({ client_id: clientIds.get(r.key)!, name: "Main site", url: r.url, environment: "production" })),
+      )
+      .select("id, url");
+    fail("create websites", created.error);
+
+    const checks = { uptime, ssl, wordpress, interval, severity };
+    const now = Date.now();
+    const monitors = created.data!.flatMap((w) => monitorsForImport({ id: w.id as string, url: w.url as string }, checks, now));
+    const { error } = await db.from("monitors").insert(monitors);
+    fail("add monitors", error);
+    return `/wpengine?imported=${created.data!.length}`;
   });
 }

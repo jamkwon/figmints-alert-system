@@ -103,7 +103,6 @@ function FailingChecks({ monitors, sampleMode }: { monitors: MonitorView[]; samp
             <th className={table.th}>Client / Monitor</th>
             <th className={table.th}>Latest result</th>
             <th className={table.th}>Last checked</th>
-            <th className={table.th}>Last successful</th>
             <th className={table.th}>
               <span className="sr-only">Actions</span>
             </th>
@@ -125,15 +124,9 @@ function FailingChecks({ monitors, sampleMode }: { monitors: MonitorView[]; samp
               </td>
               <td className={`${table.td} max-w-md`}>
                 {summary?.last_status && <CheckStatusBadge status={summary.last_status} monitorType={monitor.monitor_type} />}
-                {summary?.last_error_message && (
-                  <div className="mt-1 text-xs text-red-700">{summary.last_error_message}</div>
-                )}
               </td>
               <td className={table.td}>
                 <When iso={monitor.last_checked_at} />
-              </td>
-              <td className={table.td}>
-                <When iso={summary?.last_success_at} />
               </td>
               <td className={`${table.td} text-right`}>
                 <RunCheckButton

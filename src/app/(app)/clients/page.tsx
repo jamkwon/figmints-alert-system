@@ -40,9 +40,12 @@ export default async function ClientsPage({ searchParams }: PageProps<"/clients"
         title="Clients"
         description={`${activeCount} active client${activeCount === 1 ? "" : "s"}, most urgent first.`}
         actions={
-          <LinkButton href="/clients/new" primary>
-            Add client
-          </LinkButton>
+          <>
+            <LinkButton href="/wpengine">Import from WP Engine</LinkButton>
+            <LinkButton href="/clients/new" primary>
+              Add client
+            </LinkButton>
+          </>
         }
       />
       <FilterBar action="/clients" active={Boolean(q || health)}>

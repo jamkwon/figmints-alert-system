@@ -7,7 +7,7 @@ import type { Monitor } from "@/lib/types";
 
 // Sized so one run finishes well inside a 60 s function limit:
 // 20 monitors, 5 at a time, each check capped at 15 s.
-const MAX_MONITORS_PER_RUN = 20;
+export const MAX_MONITORS_PER_RUN = 20;
 const CONCURRENCY = 5;
 // Stop starting new checks after this; unstarted monitors are retried next run
 // once their claim lease (5 min) expires.
