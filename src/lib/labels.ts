@@ -13,6 +13,7 @@ export const MONITOR_TYPE_LABELS: Record<MonitorType, string> = {
   ssl_expiry: "SSL Certificate",
   broken_links: "Broken Links",
   tracking_tags: "Tracking Tags",
+  wordpress_health: "WordPress Health",
 };
 
 export const SEVERITY_LABELS: Record<Severity, string> = {
@@ -72,9 +73,10 @@ export const MONITOR_TYPES: readonly MonitorType[] = [
   "ssl_expiry",
   "broken_links",
   "tracking_tags",
+  "wordpress_health",
 ];
 
-/** Availability checks count toward uptime; SSL, link scans and tag checks don't (they aren't downtime). */
+/** Availability checks count toward uptime; SSL, link scans, tag and WordPress checks don't (they aren't downtime). */
 export function countsTowardUptime(type: MonitorType): boolean {
   return type === "http_status" || type === "expected_content" || type === "response_time";
 }

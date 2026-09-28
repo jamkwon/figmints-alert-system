@@ -37,6 +37,10 @@ export function titleForCheck(check: Check, monitorName: string, monitorType?: M
       : `SSL certificate problem on ${monitorName}`;
   }
   if (monitorType === "broken_links" && check.status === "warning") return `Broken links found on ${monitorName}`;
+  if (monitorType === "wordpress_health") {
+    if (/backup/i.test(check.error_message ?? "")) return `WP Engine backup problem on ${monitorName}`;
+    if (check.status === "warning") return `WordPress updates needed on ${monitorName}`;
+  }
   if (monitorType === "tracking_tags" && check.error_message?.startsWith("Missing tracking")) {
     return `Tracking tags missing on ${monitorName}`;
   }

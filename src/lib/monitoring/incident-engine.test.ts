@@ -116,3 +116,15 @@ test("tracking tag monitors get a tracking-specific title", () => {
   assert.equal(decision.kind === "open" && decision.incident.title, "Tracking tags missing on Homepage");
   assert.equal(decision.kind === "open" && decision.incident.severity, "warning");
 });
+
+test("WordPress health monitors get backup- or update-specific titles", () => {
+  const wp = { name: "Main site", severity_on_failure: "critical" as const, monitor_type: "wordpress_health" as const };
+  const backup: Check = { status: "failed", passed: false, checked_at: "t2", http_status: 200, error_message: "Latest backup was aborted" };
+  const b = decideIncident(wp, [backup, { ...backup, checked_at: "t1" }], undefined);
+  assert.equal(b.kind === "open" && b.incident.title, "WP Engine backup problem on Main site");
+  assert.equal(b.kind === "open" && b.incident.severity, "critical");
+  const updates: Check = { ...backup, status: "warning", error_message: "WordPress 7.0.5 (latest is 7.1.2)" };
+  const u = decideIncident(wp, [updates, { ...updates, checked_at: "t1" }], undefined);
+  assert.equal(u.kind === "open" && u.incident.title, "WordPress updates needed on Main site");
+  assert.equal(u.kind === "open" && u.incident.severity, "warning");
+});

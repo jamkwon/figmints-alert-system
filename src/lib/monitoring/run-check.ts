@@ -15,6 +15,18 @@ import {
 import { evaluateLinks, extractLinks, judgeLink, reasonFor, type BrokenLink, type LinkResponse } from "./links.ts";
 import { detectTags, evaluateTags, isTrackingTag, type TrackingTag } from "./tracking.ts";
 import { UnsafeUrlError, safeLookup, validateTargetUrl } from "./url-safety.ts";
+import {
+  compareVersions,
+  detectWordPress,
+  evaluateWordPress,
+  matchInstall,
+  summarizeBackups,
+  wordpressProblems,
+  type BackupStatus,
+  type WordPressFacts,
+  type WpeInstall,
+} from "./wordpress.ts";
+import { isWpeConfigured, listBackups, listInstalls } from "./wpengine.ts";
 
 const TIMEOUT_MS = 15_000;
 const MAX_REDIRECTS = 5;
@@ -417,10 +429,177 @@ export async function performTrackingCheck(monitor: Monitor): Promise<HttpCheckR
   return { outcome: evaluateTags(expected, page.found, page.responseTimeMs, page.status), metadata };
 }
 
+// WordPress health ------------------------------------------------------------------
+
+const WPORG_TIMEOUT_MS = 8_000;
+const CORE_TTL_MS = 60 * 60_000;
+const PLUGIN_TTL_MS = 6 * 60 * 60_000;
+const MAX_PLUGIN_LOOKUPS = 15;
+
+let coreCache: { at: number; version: string | null } | null = null;
+const pluginCache = new Map<string, { at: number; version: string | null }>();
+
+/** Latest WordPress release from wordpress.org (cached for an hour). */
+async function latestCoreVersion(): Promise<string | null> {
+  if (coreCache && Date.now() - coreCache.at < CORE_TTL_MS) return coreCache.version;
+  let version: string | null = null;
+  try {
+    const res = await fetch("https://api.wordpress.org/core/version-check/1.7/", {
+      signal: AbortSignal.timeout(WPORG_TIMEOUT_MS),
+      headers: { "user-agent": USER_AGENT },
+    });
+    const body = (await res.json()) as { offers?: { current?: string }[] };
+    version = body.offers?.[0]?.current ?? null;
+  } catch {
+    // wordpress.org unreachable: skip the core comparison this time.
+  }
+  coreCache = { at: Date.now(), version };
+  return version;
+}
+
+/** Latest version of a wordpress.org plugin; null for premium/unknown plugins. Cached 6 hours. */
+async function latestPluginVersion(slug: string): Promise<string | null> {
+  const hit = pluginCache.get(slug);
+  if (hit && Date.now() - hit.at < PLUGIN_TTL_MS) return hit.version;
+  let version: string | null = null;
+  try {
+    const url = `https://api.wordpress.org/plugins/info/1.2/?action=plugin_information&request%5Bslug%5D=${encodeURIComponent(slug)}&request%5Bfields%5D%5Bsections%5D=0`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(WPORG_TIMEOUT_MS), headers: { "user-agent": USER_AGENT } });
+    const body = (await res.json()) as { version?: string; error?: string };
+    version = body.error ? null : (body.version ?? null);
+  } catch {
+    version = null;
+  }
+  pluginCache.set(slug, { at: Date.now(), version });
+  return version;
+}
+
+/** Fetches a same-site URL (SSRF-safe) and returns its text, or null on any problem. */
+async function fetchOptionalText(url: string): Promise<string | null> {
+  try {
+    const { response } = await safeFetch(validateTargetUrl(url), { signal: AbortSignal.timeout(TIMEOUT_MS), accept: "*/*" });
+    if (!isExpectedStatus(response.status, null)) {
+      await response.body?.cancel();
+      return null;
+    }
+    return (await readBody(response)).text;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * WordPress version, plugins and theme from public signals, compared with
+ * wordpress.org; plus WP Engine install details and backups when the WP Engine
+ * API is configured and an install matches the site's domain.
+ */
+export async function performWordPressCheck(monitor: Monitor): Promise<HttpCheckResult> {
+  const started = performance.now();
+  const metadata: CheckMetadata = {};
+  const pageFailed = (partial: Partial<HttpObservation>): HttpCheckResult => ({
+    outcome: evaluateCheck(monitor, {
+      httpStatus: null,
+      statusText: "",
+      responseTimeMs: performance.now() - started,
+      body: null,
+      error: null,
+      ...partial,
+    }),
+    metadata,
+  });
+
+  let page: { response: Response; url: URL };
+  let html: string;
+  try {
+    page = await safeFetch(validateTargetUrl(monitor.target_url), { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    html = (await readBody(page.response)).text;
+  } catch (err) {
+    return pageFailed({ error: describeFetchError(err) });
+  }
+  if (!isExpectedStatus(page.response.status, null)) {
+    return pageFailed({ httpStatus: page.response.status, statusText: page.response.statusText });
+  }
+
+  const origin = page.url.origin;
+  const [feed, restIndex, latestCore] = await Promise.all([
+    fetchOptionalText(`${origin}/feed/`),
+    fetchOptionalText(`${origin}/wp-json/`),
+    latestCoreVersion(),
+  ]);
+  let namespaces: string[] | null = null;
+  try {
+    const parsed = restIndex ? (JSON.parse(restIndex) as { namespaces?: unknown }) : null;
+    namespaces = Array.isArray(parsed?.namespaces) ? parsed.namespaces.filter((n): n is string => typeof n === "string") : null;
+  } catch {
+    namespaces = null;
+  }
+  const signals = detectWordPress(html, feed, namespaces);
+
+  // WP Engine: install details and backups for the install serving this domain.
+  let install: WpeInstall | null = null;
+  let backups: BackupStatus | null = null;
+  let wpengineError: string | null = null;
+  if (isWpeConfigured()) {
+    try {
+      const installs = await listInstalls();
+      install = matchInstall(installs, page.url.hostname) ?? matchInstall(installs, new URL(monitor.target_url).hostname);
+      if (install) backups = summarizeBackups(await listBackups(install.id));
+    } catch (err) {
+      wpengineError = err instanceof Error ? err.message : "WP Engine API request failed";
+    }
+  }
+
+  // Compare plugins whose version the page reveals with wordpress.org.
+  const versioned = signals.plugins.filter((p) => p.version).slice(0, MAX_PLUGIN_LOOKUPS);
+  const latestBySlug = new Map(await Promise.all(versioned.map(async (p) => [p.slug, await latestPluginVersion(p.slug)] as const)));
+  const plugins = signals.plugins.map((p) => ({ ...p, latest: latestBySlug.get(p.slug) ?? null }));
+  const outdatedPlugins = plugins
+    .filter((p) => p.version && p.latest && compareVersions(p.version, p.latest) < 0)
+    .map((p) => ({ slug: p.slug, version: p.version!, latest: p.latest! }));
+
+  const wpeVersion = install?.wp_version ?? backups?.wordpressVersion ?? null;
+  const facts: WordPressFacts = {
+    wpVersion: wpeVersion ?? signals.version,
+    latestWpVersion: latestCore,
+    phpVersion: install?.php_version ?? null,
+    install,
+    backups,
+    outdatedPlugins,
+    isWordPress: signals.isWordPress,
+  };
+  const problems = wordpressProblems(facts, new Date());
+
+  Object.assign(metadata, {
+    final_url: page.url.toString(),
+    wordpress: {
+      version: facts.wpVersion,
+      latest: latestCore,
+      source: wpeVersion ? "wpengine" : signals.versionSource,
+    },
+    php_version: facts.phpVersion,
+    themes: signals.themes,
+    plugins,
+    wpengine: install
+      ? {
+          install: install.name,
+          environment: install.environment,
+          status: install.status,
+          last_backup_at: backups?.lastCompletedAt ?? null,
+          latest_backup_status: backups?.latestStatus ?? null,
+          upgrades_deferred_until: install.defer_wordpress_upgrades_until,
+        }
+      : null,
+    wpengine_note: wpengineError ?? (isWpeConfigured() ? (install ? null : "No WP Engine install matches this domain") : "WP Engine API not configured"),
+    problems,
+  });
+  return { outcome: evaluateWordPress(problems, performance.now() - started, page.response.status), metadata };
+}
+
 /** Runs the right kind of check for the monitor. */
 export function performCheck(monitor: Monitor): Promise<HttpCheckResult> {
   if (monitor.monitor_type === "ssl_expiry") return performCertificateCheck(monitor);
   if (monitor.monitor_type === "broken_links") return performBrokenLinksCheck(monitor);
   if (monitor.monitor_type === "tracking_tags") return performTrackingCheck(monitor);
+  if (monitor.monitor_type === "wordpress_health") return performWordPressCheck(monitor);
   return performHttpCheck(monitor);
 }
