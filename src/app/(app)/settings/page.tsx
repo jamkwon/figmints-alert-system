@@ -10,6 +10,8 @@ import { APP_TIMEZONE } from "@/lib/format";
 import { allowedDomains } from "@/lib/auth/session";
 import { SSL_FAILURE_DAYS, SSL_WARNING_DAYS } from "@/lib/monitoring/evaluate";
 import { MAX_LINKS } from "@/lib/monitoring/links";
+import { BACKUP_MAX_AGE_HOURS } from "@/lib/monitoring/wordpress";
+import { checkWpeConnection } from "@/lib/monitoring/wpengine";
 import { RETENTION_DAYS } from "@/lib/monitoring/scheduler";
 import { appUrl, slackWebhookUrl } from "@/lib/notify/send";
 import { supabaseEnvStatus } from "@/lib/supabase/server";
@@ -60,6 +62,7 @@ export default async function SettingsPage() {
 
   const { dueNow, nextDue, lastCheck } = await getSchedulerStatus();
   const slackConfigured = slackWebhookUrl() !== null;
+  const wpe = source === "sample" ? { ok: false, message: "Not configured" } : await checkWpeConnection();
   const alertLinkBase = appUrl();
 
   return (
@@ -160,6 +163,27 @@ export default async function SettingsPage() {
                 source === "sample" ? "Connect Supabase first" : !slackConfigured ? "Set SLACK_WEBHOOK_URL first" : undefined
               }
             />
+          </Row>
+        </dl>
+      </Panel>
+
+      <Panel title="WP Engine" className="mt-6">
+        <dl>
+          <Row label="Connection">
+            {wpe.ok ? (
+              <HealthBadge health="healthy" label={wpe.message} />
+            ) : wpe.message === "Not configured" ? (
+              <span className="flex items-center gap-2">
+                <HealthBadge health="unknown" label="Not set up" />
+                <span className="text-xs text-slate-500">Set WPENGINE_API_USER and WPENGINE_API_PASSWORD (see README → WordPress health).</span>
+              </span>
+            ) : (
+              <HealthBadge health="critical" label={wpe.message} />
+            )}
+          </Row>
+          <Row label="What it adds">
+            WordPress and PHP versions, install status and backups for sites hosted on WP Engine. A WordPress Health
+            monitor is critical when there&apos;s no completed backup in {BACKUP_MAX_AGE_HOURS} hours.
           </Row>
         </dl>
       </Panel>

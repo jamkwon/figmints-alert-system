@@ -17,6 +17,7 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 - **Phase 8 (advanced monitoring): SSL certificate expiry done.** An *SSL Certificate* monitor warns before a site's certificate expires. See **SSL certificates**.
 - **Phase 8: broken link scans done.** A *Broken Links* monitor scans a page's links, images, stylesheets and scripts. See **Broken link scans**.
 - **Phase 8: tracking tag checks done.** A *Tracking Tags* monitor makes sure GTM, GA4, Google Ads, Meta Pixel, LinkedIn Insight and HubSpot tags stay on a page. See **Tracking tags**.
+- **Phase 7 (WordPress / WP Engine), Stage A: done.** A *WordPress Health* monitor checks WordPress and PHP versions, visible plugins, and WP Engine install status and backups. See **WordPress health**. Evaluation: `docs/phase-7-wordpress-evaluation.md`.
 
 Running checks and updating incidents require Supabase. On sample data those controls are disabled.
 
@@ -53,6 +54,7 @@ Copy `.env.example` to `.env.local`:
 | `CRON_SECRET` | For scheduled checks | Random string (16+ characters) that the scheduler must send. See **Scheduled checks**. |
 | `SLACK_WEBHOOK_URL` | For alerts | Slack Incoming Webhook (`https://hooks.slack.com/...`). **Secret.** No alerts are sent without it. |
 | `APP_URL` | No | Public app address for "Open incident" links in alerts. On Vercel the production domain is detected automatically. |
+| `WPENGINE_API_USER` / `WPENGINE_API_PASSWORD` | For WP Engine data | API credentials from my.wpengine.com → API Access. **Secret.** Used read-only (installs and backups). |
 | `APP_TIMEZONE` | No | Timezone for displayed times. Default `America/New_York`. |
 
 Both Supabase variables must be set for the app to use Supabase. Settings shows which data source is active and which variable names it found.
@@ -90,6 +92,7 @@ The schema lives in `supabase/migrations/`. Sample data lives in `supabase/seed.
    - `20260927000000_ssl_expiry.sql` (Phase 8, SSL)
    - `20260928000000_broken_links.sql` (Phase 8, broken links)
    - `20260929000000_tracking_tags.sql` (Phase 8, tracking tags)
+   - `20260930000000_wordpress_health.sql` (Phase 7, WordPress health)
 3. (Optional) Run `supabase/seed.sql` to load the 6 sample clients. You can re-run it safely; it replaces the earlier sample rows.
 4. Copy the project URL and the secret key into `.env.local`, then restart `npm run dev`.
 
@@ -129,7 +132,7 @@ Row-level security is enabled on every table with **no policies**. The public an
 | `npm start` | Serve the production build |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | Generate route types and run `tsc` |
-| `npm test` | Unit tests for health rules, check evaluation (HTTP, SSL, broken links, tracking tags), incident rules, alert rules, login rules, form validation and SSRF protection (Node's built-in test runner) |
+| `npm test` | Unit tests for health rules, check evaluation (HTTP, SSL, broken links, tracking tags, WordPress), incident rules, alert rules, login rules, form validation and SSRF protection (Node's built-in test runner) |
 
 ## Project layout
 
@@ -154,6 +157,8 @@ src/
       evaluate.ts       Pure pass/fail rules for a check (HTTP and SSL)
       links.ts          Broken link scans: which links to check, what counts as broken
       tracking.ts       Tracking tag detection (GTM, GA4, Google Ads, Meta, LinkedIn, HubSpot)
+      wordpress.ts      WordPress detection, version compare, backup/PHP rules
+      wpengine.ts       WP Engine API client (read-only: installs, backups)
       url-safety.ts     SSRF protection
       incident-engine.ts Pure rules: when to open, update or resolve an incident
       record.ts         Runs a check, saves the result, applies incident rules
@@ -176,6 +181,7 @@ Each check makes one `GET` request to the monitor's target URL and stores the re
 | HTTP Status | Status is 200–399, or exactly the monitor's *expected status* if one is set | Failed |
 | Expected Content | Status passes **and** the expected text appears in the page's visible text | Failed |
 | Response Time | Status passes **and** the full response takes no longer than *max response time* (default 3000 ms) | Warning (slow) |
+| WordPress Health | No backup problems and nothing out of date | Failed on backup problems (uses the monitor's severity; default Critical); Warning for outdated WordPress, PHP or plugins |
 | Tracking Tags | The page loads and every expected tag is in its HTML | Failed, naming the missing tags (uses the monitor's severity; default Warning) |
 | Broken Links | The page loads and none of its first 40 links/images/stylesheets/scripts are broken | Warning when any are broken; Failed only if the page itself doesn't load |
 | SSL Certificate | The certificate is trusted, matches the domain, and has more than 14 days left | Warning at 14 days or less; Failed at 3 days or less, or when expired, untrusted or for the wrong domain |
@@ -223,6 +229,33 @@ An **SSL Certificate** monitor opens a secure connection to the website (port 44
 - **Where you see it:** the expiry date and days left appear in monitor tables and on the monitor page, along with the issuer.
 - **Uptime:** SSL monitors don't count toward uptime, because an expiring certificate isn't downtime.
 - **Safety:** the connection uses the same SSRF protection as page checks.
+
+### WordPress health
+
+A **WordPress Health** monitor combines three sources:
+
+1. **Public signals** (every WordPress site): the WordPress version (from the RSS feed, meta generator, or asset versions), themes, and plugins visible in page assets or the REST API index.
+2. **WordPress.org:** the latest WordPress release, and the latest version of free plugins whose version the page reveals.
+3. **WP Engine API** (sites on WP Engine, once connected): the install serving the site's domain, with its WordPress and PHP versions, status, whether upgrades are deliberately deferred, and **backups**.
+
+| Result | When |
+| --- | --- |
+| **Failed** (monitor severity, Critical by default, so it posts to Slack) | No completed WP Engine backup in **48 hours**, none at all, or the **latest backup was aborted** |
+| **Warning** | WordPress older than the latest release (unless upgrades are deferred on WP Engine), PHP below 8.2, WP Engine install not active, plugins with updates, or WordPress not detected |
+
+- **Adding one:** tick **Also check WordPress health** on **Add client** or **Add monitors**. It's checked every 6 hours, one per website. The **One monitor** tab also offers the *WordPress Health* type.
+- **Where you see it:** the monitor page's **WordPress** panel shows the versions and where they came from, PHP, the WP Engine install, the last backup, the theme, and each visible plugin with its version and any update.
+- **Limits:** plugin updates are only known for free wordpress.org plugins whose version is visible from outside. Premium plugins (Gravity Forms, ACF Pro…) and hidden versions need the Stage B plugin described in the evaluation doc. Sites not on WP Engine get public signals only.
+
+#### Connecting WP Engine (once)
+
+1. Create a dedicated WP Engine user, e.g. `websitewatch@figmints.com`, with **Full (no billing)** access: **Users → Account Users → Invite account user**.
+2. As the account **Owner**: **Users → API Access** → switch the account **On**.
+3. Logged in as the dedicated user: **API Access → Generate Credentials**. Store them in a password manager.
+4. Add `WPENGINE_API_USER` and `WPENGINE_API_PASSWORD` in Vercel (Production, **Sensitive**), and in `.env.local` for local use. Redeploy.
+5. **Settings → WP Engine** should say *Connected · N installs*. Installs are matched to websites by domain automatically (the primary domain, ignoring `www.`, or the `*.wpengine.com` address).
+
+Website Watch only **reads** from WP Engine: it lists installs and backups. It never creates backups or changes anything.
 
 ### Tracking tags
 
@@ -419,5 +452,6 @@ Staff sign in with **Google**. Only accounts on an allowed domain (`figmints.com
 - **SSRF protection** (`src/lib/monitoring/url-safety.ts`): only `http`/`https` on ports 80, 443, 8080 or 8443; no credentials in URLs; no internal hostnames (`localhost`, `*.local`, single-word names). Every DNS answer is checked **at connection time**, so private, loopback, link-local (including the `169.254.169.254` cloud metadata address), CGNAT, multicast and reserved IPv4/IPv6 addresses are refused, even after a redirect or a DNS change.
 - The Run check action accepts only a monitor ID and always fetches the URL stored in the database. It can't be used to request arbitrary addresses. Only signed-in staff can run it.
 - The scheduler endpoint refuses every request unless `CRON_SECRET` (16+ characters) is set and sent as `Authorization: Bearer …`. The comparison is constant-time. It only checks monitors already in the database.
+- WP Engine credentials are used server-side only, for read-only calls to the fixed `api.wpengineapi.com` host.
 - Alerts are only posted to a `hooks.slack.com` webhook from `SLACK_WEBHOOK_URL`. Client names, titles and errors are escaped before they go into Slack formatting.
 - `claim_due_monitors` can only be called with the secret key; execution is revoked from the public `anon` and `authenticated` roles.

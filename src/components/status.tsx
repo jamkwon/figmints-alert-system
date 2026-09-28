@@ -72,7 +72,14 @@ const CHECK_STATUS_DISPLAY: Record<CheckStatus, { health: Health; label: string 
 /** Result of a single check run. A warning means "slow" for pages, "expiring soon" for certificates. */
 export function CheckStatusBadge({ status, monitorType }: { status: CheckStatus; monitorType?: MonitorType }) {
   const { health, label } = CHECK_STATUS_DISPLAY[status];
-  const warningLabel = monitorType === "ssl_expiry" ? "Expiring soon" : monitorType === "broken_links" ? "Broken links" : label;
+  const warningLabel =
+    monitorType === "ssl_expiry"
+      ? "Expiring soon"
+      : monitorType === "broken_links"
+        ? "Broken links"
+        : monitorType === "wordpress_health"
+          ? "Updates needed"
+          : label;
   if (status === "failed" && monitorType === "tracking_tags") return <HealthBadge health={health} label="Tags missing" />;
   return <HealthBadge health={health} label={status === "warning" ? warningLabel : label} />;
 }

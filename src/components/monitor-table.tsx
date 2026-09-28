@@ -3,13 +3,37 @@ import { RunCheckButton } from "@/components/run-check-button";
 import { HealthBadge } from "@/components/status";
 import { EmptyState, When, table } from "@/components/ui";
 import { getDataSource, type MonitorView } from "@/lib/data";
-import { certificateInfo, displayUrl, formatDate, formatUptime, linkScanInfo, trackingInfo } from "@/lib/format";
+import {
+  certificateInfo,
+  displayUrl,
+  formatDate,
+  formatUptime,
+  linkScanInfo,
+  timeAgo,
+  trackingInfo,
+  wordpressInfo,
+} from "@/lib/format";
+import { compareVersions } from "@/lib/monitoring/wordpress";
 import { TRACKING_TAGS, isTrackingTag } from "@/lib/monitoring/tracking";
 import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS, countsTowardUptime, formatInterval } from "@/lib/labels";
 
 function LastResult({ view }: { view: MonitorView }) {
   const s = view.summary;
   if (!s?.last_status) return <span className="text-slate-400">No checks yet</span>;
+  const wp = view.monitor.monitor_type === "wordpress_health" ? wordpressInfo(s.last_metadata) : null;
+  if (wp) {
+    const behind = wp.version && wp.latest && compareVersions(wp.version, wp.latest) < 0;
+    return (
+      <div className="text-xs text-slate-600">
+        {wp.version ? <>WordPress {wp.version}</> : "WordPress version hidden"}
+        {behind && <span className="text-amber-700"> ({wp.latest} available)</span>}
+        {wp.wpengine?.last_backup_at && <> · backup {timeAgo(wp.wpengine.last_backup_at)}</>}
+        {wp.problems.some((p) => p.level === "critical") && (
+          <div className="mt-0.5 text-red-700">{wp.problems.filter((p) => p.level === "critical").map((p) => p.message).join("; ")}</div>
+        )}
+      </div>
+    );
+  }
   const tags = view.monitor.monitor_type === "tracking_tags" ? trackingInfo(s.last_metadata) : null;
   if (tags) {
     const foundCount = Object.keys(tags.found).length;

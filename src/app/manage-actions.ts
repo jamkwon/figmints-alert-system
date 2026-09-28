@@ -169,6 +169,30 @@ async function addTrackingMonitor(websiteId: string, websiteUrl: string) {
   fail("add tracking check", error);
 }
 
+/** Adds a WordPress health check for the website, unless it already has one. */
+async function addWordPressMonitor(websiteId: string, websiteUrl: string) {
+  const db = getSupabase();
+  const existing = await db
+    .from("monitors")
+    .select("id")
+    .eq("website_id", websiteId)
+    .eq("monitor_type", "wordpress_health")
+    .limit(1);
+  fail("check WordPress monitors", existing.error);
+  if (existing.data?.length) return;
+  const { error } = await db.from("monitors").insert({
+    website_id: websiteId,
+    name: "WordPress Health",
+    monitor_type: "wordpress_health",
+    target_url: new URL(websiteUrl).origin + "/",
+    // Every 6 hours catches a failed nightly backup the same day.
+    interval_minutes: 360,
+    severity_on_failure: "critical",
+    next_check_at: null,
+  });
+  fail("add WordPress check", error);
+}
+
 // Clients ---------------------------------------------------------------------
 
 export async function saveClientAction(_prev: FormState, formData: FormData): Promise<FormState> {
@@ -206,6 +230,7 @@ export async function saveClientAction(_prev: FormState, formData: FormData): Pr
       if (parseCheckbox(formData.get("ssl"))) await addSslMonitor(website.data!.id, primaryWebsite, severity);
       if (parseCheckbox(formData.get("links"))) await addLinkScanMonitor(website.data!.id, primaryWebsite);
       if (parseCheckbox(formData.get("tags"))) await addTrackingMonitor(website.data!.id, primaryWebsite);
+      if (parseCheckbox(formData.get("wordpress"))) await addWordPressMonitor(website.data!.id, primaryWebsite);
     }
     return `/clients/${client.data!.id}`;
   });
@@ -288,7 +313,8 @@ export async function addMonitorsAction(_prev: FormState, formData: FormData): P
     const ssl = parseCheckbox(formData.get("ssl"));
     const linkScan = parseCheckbox(formData.get("links"));
     const tags = parseCheckbox(formData.get("tags"));
-    if (lines.length === 0 && !ssl && !linkScan && !tags) {
+    const wordpress = parseCheckbox(formData.get("wordpress"));
+    if (lines.length === 0 && !ssl && !linkScan && !tags && !wordpress) {
       throw new ValidationError("pages", "Add at least one page, or tick one of the extra checks.");
     }
     const severity = parseSeverity(formData.get("severity_on_failure"));
@@ -296,6 +322,7 @@ export async function addMonitorsAction(_prev: FormState, formData: FormData): P
     if (ssl) await addSslMonitor(website.id, website.url, severity);
     if (linkScan) await addLinkScanMonitor(website.id, website.url);
     if (tags) await addTrackingMonitor(website.id, website.url);
+    if (wordpress) await addWordPressMonitor(website.id, website.url);
     return `/clients/${website.client_id}`;
   });
 }
@@ -304,7 +331,11 @@ export async function addMonitorsAction(_prev: FormState, formData: FormData): P
 function parseMonitorFields(formData: FormData, websiteUrl: string) {
   const monitorType = parseMonitorType(formData.get("monitor_type"));
   // SSL, link scans and tag checks have their own rules; expected status/text don't apply.
-  const ownRules = monitorType === "ssl_expiry" || monitorType === "broken_links" || monitorType === "tracking_tags";
+  const ownRules =
+    monitorType === "ssl_expiry" ||
+    monitorType === "broken_links" ||
+    monitorType === "tracking_tags" ||
+    monitorType === "wordpress_health";
   const expectedTags = monitorType === "tracking_tags" ? parseExpectedTags(formData.getAll("expected_tags")) : [];
   const expectedText = ownRules ? null : parseExpectedText(formData.get("expected_text"));
   if (monitorType === "expected_content" && !expectedText) {

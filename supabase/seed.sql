@@ -188,3 +188,37 @@ values
    '{"tags_expected": ["gtm", "ga4", "meta_pixel"], "tags_found": {"gtm": ["GTM-HVD2024"], "ga4": ["G-HVD8K2L1Q"], "meta_pixel": ["1122334455667788"]}}'),
   ('33333333-3333-4333-8333-000000000017', 'failed', now() - interval '50 minutes', 200, 900, false, 'Missing tracking: Meta Pixel',
    '{"tags_expected": ["gtm", "ga4", "meta_pixel"], "tags_found": {"gtm": ["GTM-HVD2024"], "ga4": ["G-HVD8K2L1Q"]}}');
+
+-- WordPress health (Phase 7): Blue Finch needs updates; Northgate's latest WP Engine backup aborted.
+insert into public.monitors (id, website_id, name, monitor_type, target_url, interval_minutes, severity_on_failure, last_checked_at, next_check_at)
+values
+  ('33333333-3333-4333-8333-000000000018', '22222222-2222-4222-8222-000000000003', 'WordPress Health', 'wordpress_health',
+   'https://bluefinchbakery.example/', 360, 'critical', now() - interval '30 minutes', now() + interval '330 minutes'),
+  ('33333333-3333-4333-8333-000000000019', '22222222-2222-4222-8222-000000000002', 'WordPress Health', 'wordpress_health',
+   'https://northgatetitle.example/', 360, 'critical', now() - interval '20 minutes', now() + interval '340 minutes');
+
+insert into public.check_results (monitor_id, status, checked_at, http_status, response_time_ms, passed, error_message, metadata)
+values
+  ('33333333-3333-4333-8333-000000000018', 'warning', now() - interval '30 minutes', 200, 2100, false,
+   'WordPress 7.0.5 (latest is 7.1.2); 1 plugin with updates available',
+   jsonb_build_object(
+     'wordpress', jsonb_build_object('version', '7.0.5', 'latest', '7.1.2', 'source', 'wpengine'),
+     'php_version', '8.3', 'themes', jsonb_build_array('kadence'),
+     'plugins', '[{"slug": "woocommerce", "version": "10.1.2", "latest": "10.1.2", "source": "asset"},
+                  {"slug": "wordpress-seo", "version": "28.1", "latest": "28.5", "source": "asset"},
+                  {"slug": "gravityforms", "version": "2.10.2", "latest": null, "source": "asset"}]'::jsonb,
+     'wpengine', jsonb_build_object('install', 'bluefinchprod', 'environment', 'production', 'status', 'active',
+       'last_backup_at', now() - interval '6 hours', 'latest_backup_status', 'completed', 'upgrades_deferred_until', null),
+     'wpengine_note', null,
+     'problems', '[{"level": "warning", "message": "WordPress 7.0.5 (latest is 7.1.2)"},
+                   {"level": "warning", "message": "1 plugin with updates available"}]'::jsonb)),
+  ('33333333-3333-4333-8333-000000000019', 'failed', now() - interval '20 minutes', 200, 1900, false,
+   'Latest backup was aborted',
+   jsonb_build_object(
+     'wordpress', jsonb_build_object('version', '7.1.2', 'latest', '7.1.2', 'source', 'wpengine'),
+     'php_version', '8.2', 'themes', jsonb_build_array('astra'),
+     'plugins', '[{"slug": "wordpress-seo", "version": null, "latest": null, "source": "rest"}]'::jsonb,
+     'wpengine', jsonb_build_object('install', 'northgateprod', 'environment', 'production', 'status', 'active',
+       'last_backup_at', now() - interval '25 hours', 'latest_backup_status', 'aborted', 'upgrades_deferred_until', null),
+     'wpengine_note', null,
+     'problems', '[{"level": "critical", "message": "Latest backup was aborted"}]'::jsonb));
