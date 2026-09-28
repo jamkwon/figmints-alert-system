@@ -172,6 +172,73 @@ export function summarizeBackups(backups: WpeBackup[]): BackupStatus {
   };
 }
 
+// Website Watch Health plugin (Stage B) ----------------------------------------------
+
+export interface PluginReportItem {
+  /** Plugin file (e.g. "gravityforms/gravityforms.php") or theme folder. */
+  id: string;
+  name: string;
+  version: string | null;
+  active: boolean;
+  /** Version WordPress offers as an update, if any. */
+  update: string | null;
+}
+
+export interface PluginReport {
+  pluginVersion: string | null;
+  generatedAt: string | null;
+  wordpress: { version: string | null; update: string | null; checkedAt: string | null };
+  php: { version: string | null; memoryLimit: string | null };
+  debugDisplay: boolean;
+  cron: { disabled: boolean; overdueMinutes: number | null };
+  plugins: PluginReportItem[];
+  pluginsCheckedAt: string | null;
+  themes: PluginReportItem[];
+}
+
+const MAX_REPORT_ITEMS = 300;
+const text = (v: unknown, max = 200): string | null => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
+const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
+
+function reportItems(v: unknown, idKey: "file" | "slug"): PluginReportItem[] {
+  if (!Array.isArray(v)) return [];
+  return v.slice(0, MAX_REPORT_ITEMS).flatMap((raw) => {
+    const item = obj(raw);
+    const id = text(item[idKey]);
+    if (!id) return [];
+    return [{ id, name: text(item.name) ?? id, version: text(item.version, 40), active: item.active === true, update: text(item.update, 40) }];
+  });
+}
+
+/** Validates the plugin's JSON; null when it isn't a Website Watch Health report. */
+export function parsePluginReport(body: unknown): PluginReport | null {
+  const r = obj(body);
+  const wp = obj(r.wordpress);
+  if (!("plugins" in r) || typeof wp.version !== "string") return null;
+  const php = obj(r.php);
+  const cron = obj(r.cron);
+  const overdue = cron.overdue_minutes;
+  return {
+    pluginVersion: text(r.plugin_version, 20),
+    generatedAt: text(r.generated_at, 40),
+    wordpress: { version: text(wp.version, 40), update: text(wp.update, 40), checkedAt: text(wp.checked_at, 40) },
+    php: { version: text(php.version, 40), memoryLimit: text(php.memory_limit, 20) },
+    debugDisplay: r.debug_display === true,
+    cron: {
+      disabled: cron.disabled === true,
+      overdueMinutes: typeof overdue === "number" && Number.isFinite(overdue) ? Math.max(0, Math.round(overdue)) : null,
+    },
+    plugins: reportItems(r.plugins, "file"),
+    pluginsCheckedAt: text(r.plugins_checked_at, 40),
+    themes: reportItems(r.themes, "slug"),
+  };
+}
+
+/** WP-Cron this far behind means WordPress's own update checks aren't running. */
+export const CRON_OVERDUE_WARNING_MINUTES = 120;
+/** WordPress normally checks for updates twice a day. */
+export const UPDATES_STALE_HOURS = 72;
+
 // Evaluation ------------------------------------------------------------------------
 
 export interface WordPressFacts {
@@ -185,6 +252,8 @@ export interface WordPressFacts {
   /** Plugins where the site's version is known and older than wordpress.org's. */
   outdatedPlugins: { slug: string; version: string; latest: string }[];
   isWordPress: boolean;
+  /** From the Website Watch Health plugin, when installed. */
+  report?: PluginReport | null;
 }
 
 export interface WordPressProblem {
@@ -216,7 +285,24 @@ export function wordpressProblems(f: WordPressFacts, now: Date): WordPressProble
     const n = f.outdatedPlugins.length;
     problems.push({ level: "warning", message: `${n} plugin${n === 1 ? "" : "s"} with updates available` });
   }
-  if (!f.isWordPress && !f.install) problems.push({ level: "warning", message: "WordPress not detected on this page" });
+  if (f.report) {
+    const themes = f.report.themes.filter((t) => t.update).length;
+    if (themes > 0) problems.push({ level: "warning", message: `${themes} theme${themes === 1 ? "" : "s"} with updates available` });
+    if (f.report.debugDisplay) {
+      problems.push({ level: "warning", message: "Debug mode shows PHP errors to visitors (WP_DEBUG_DISPLAY)" });
+    }
+    const overdue = f.report.cron.overdueMinutes;
+    if (overdue !== null && overdue > CRON_OVERDUE_WARNING_MINUTES) {
+      problems.push({ level: "warning", message: `WP-Cron is ${Math.floor(overdue / 60)} hours behind` });
+    }
+    const checked = f.report.pluginsCheckedAt ? new Date(f.report.pluginsCheckedAt).getTime() : NaN;
+    if (Number.isNaN(checked) || (now.getTime() - checked) / 3_600_000 > UPDATES_STALE_HOURS) {
+      problems.push({ level: "warning", message: "WordPress hasn't checked for plugin updates in 3 days, so updates may be missing" });
+    }
+  }
+  if (!f.isWordPress && !f.install && !f.report) {
+    problems.push({ level: "warning", message: "WordPress not detected on this page" });
+  }
   return problems;
 }
 
