@@ -1,4 +1,5 @@
 // Performs one HTTP check for a monitor. Never throws: failures become a failed outcome.
+import type { KeyObject } from "node:crypto";
 import { isIP } from "node:net";
 import { connect as connectTls } from "node:tls";
 import { Agent, fetch, type Response } from "undici";
@@ -20,13 +21,16 @@ import {
   detectWordPress,
   evaluateWordPress,
   matchInstall,
+  parsePluginReport,
   summarizeBackups,
   wordpressProblems,
   type BackupStatus,
+  type PluginReport,
   type WordPressFacts,
   type WpeInstall,
 } from "./wordpress.ts";
 import { isWpeConfigured, listBackups, listInstalls } from "./wpengine.ts";
+import { WP_PLUGIN_ROUTE, pluginKey, signRequest } from "./wp-plugin.ts";
 
 const TIMEOUT_MS = 15_000;
 const MAX_REDIRECTS = 5;
@@ -136,7 +140,14 @@ class TooManyRedirectsError extends Error {
  */
 async function safeFetch(
   start: URL,
-  options: { method?: "GET" | "HEAD"; signal: AbortSignal; followRedirects?: boolean; accept?: string },
+  options: {
+    method?: "GET" | "HEAD" | "POST";
+    signal: AbortSignal;
+    followRedirects?: boolean;
+    accept?: string;
+    /** Extra request headers. Don't combine secrets with followRedirects, or they'd go to the redirect target. */
+    headers?: Record<string, string>;
+  },
 ): Promise<{ response: Response; url: URL; redirects: number }> {
   let url = start;
   let redirects = 0;
@@ -146,7 +157,11 @@ async function safeFetch(
       dispatcher: agent,
       redirect: "manual",
       signal: options.signal,
-      headers: { "user-agent": USER_AGENT, accept: options.accept ?? "text/html,application/xhtml+xml,*/*;q=0.8" },
+      headers: {
+        ...options.headers,
+        "user-agent": USER_AGENT,
+        accept: options.accept ?? "text/html,application/xhtml+xml,*/*;q=0.8",
+      },
     });
     const location = response.headers.get("location");
     const isRedirect = response.status >= 300 && response.status < 400 && location;
@@ -489,6 +504,50 @@ async function fetchOptionalText(url: string): Promise<string | null> {
 }
 
 /**
+ * Asks the Website Watch Health plugin on this origin for its report. The
+ * request is signed for this host only, and redirects aren't followed.
+ */
+async function fetchPluginReport(origin: string, key: KeyObject): Promise<{ report: PluginReport | null; note: string }> {
+  try {
+    const { response } = await safeFetch(validateTargetUrl(origin + WP_PLUGIN_ROUTE), {
+      method: "POST",
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      followRedirects: false,
+      accept: "application/json",
+      headers: signRequest(key, new URL(origin).hostname),
+    });
+    if (response.status === 401 || response.status === 403) {
+      await response.body?.cancel();
+      return {
+        report: null,
+        note: "The Website Watch plugin rejected the request: re-install it from Settings if the key changed, or check the site's clock",
+      };
+    }
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel();
+      return { report: null, note: "The plugin request was redirected, so the report was skipped" };
+    }
+    const body = await readBody(response);
+    let report: PluginReport | null = null;
+    try {
+      report = response.ok ? parsePluginReport(JSON.parse(body.text)) : null;
+    } catch {
+      report = null;
+    }
+    if (report) return { report, note: "Reported by the Website Watch plugin" };
+    return {
+      report: null,
+      note:
+        response.status === 404 || response.ok
+          ? "Website Watch plugin not installed or not active"
+          : `Plugin report failed (HTTP ${response.status})`,
+    };
+  } catch (err) {
+    return { report: null, note: `Couldn't reach the Website Watch plugin: ${describeFetchError(err)}` };
+  }
+}
+
+/**
  * WordPress version, plugins and theme from public signals, compared with
  * wordpress.org; plus WP Engine install details and backups when the WP Engine
  * API is configured and an install matches the site's domain.
@@ -521,11 +580,14 @@ export async function performWordPressCheck(monitor: Monitor): Promise<HttpCheck
   }
 
   const origin = page.url.origin;
-  const [feed, restIndex, latestCore] = await Promise.all([
+  const signingKey = pluginKey();
+  const [feed, restIndex, latestCore, pluginResult] = await Promise.all([
     fetchOptionalText(`${origin}/feed/`),
     fetchOptionalText(`${origin}/wp-json/`),
     latestCoreVersion(),
+    signingKey ? fetchPluginReport(origin, signingKey) : null,
   ]);
+  const report = pluginResult?.report ?? null;
   let namespaces: string[] | null = null;
   try {
     const parsed = restIndex ? (JSON.parse(restIndex) as { namespaces?: unknown }) : null;
@@ -549,23 +611,40 @@ export async function performWordPressCheck(monitor: Monitor): Promise<HttpCheck
     }
   }
 
-  // Compare plugins whose version the page reveals with wordpress.org.
-  const versioned = signals.plugins.filter((p) => p.version).slice(0, MAX_PLUGIN_LOOKUPS);
-  const latestBySlug = new Map(await Promise.all(versioned.map(async (p) => [p.slug, await latestPluginVersion(p.slug)] as const)));
-  const plugins = signals.plugins.map((p) => ({ ...p, latest: latestBySlug.get(p.slug) ?? null }));
+  // The plugin knows every plugin and its update (premium included). Without it,
+  // compare plugins whose version the page reveals with wordpress.org.
+  let plugins: { slug: string; name?: string; version: string | null; latest: string | null; source: string; active?: boolean }[];
+  if (report) {
+    plugins = report.plugins.map((p) => ({
+      slug: p.id.split("/")[0].replace(/.php$/, ""),
+      name: p.name,
+      version: p.version,
+      latest: p.update,
+      source: "plugin",
+      active: p.active,
+    }));
+  } else {
+    const versioned = signals.plugins.filter((p) => p.version).slice(0, MAX_PLUGIN_LOOKUPS);
+    const latestBySlug = new Map(
+      await Promise.all(versioned.map(async (p) => [p.slug, await latestPluginVersion(p.slug)] as const)),
+    );
+    plugins = signals.plugins.map((p) => ({ ...p, latest: latestBySlug.get(p.slug) ?? null }));
+  }
+  // The plugin reports WordPress's own update offers; public versions are compared.
   const outdatedPlugins = plugins
-    .filter((p) => p.version && p.latest && compareVersions(p.version, p.latest) < 0)
+    .filter((p) => p.version && p.latest && (report ? true : compareVersions(p.version, p.latest) < 0))
     .map((p) => ({ slug: p.slug, version: p.version!, latest: p.latest! }));
 
   const wpeVersion = install?.wp_version ?? backups?.wordpressVersion ?? null;
   const facts: WordPressFacts = {
-    wpVersion: wpeVersion ?? signals.version,
+    wpVersion: report?.wordpress.version ?? wpeVersion ?? signals.version,
     latestWpVersion: latestCore,
-    phpVersion: install?.php_version ?? null,
+    phpVersion: report?.php.version ?? install?.php_version ?? null,
     install,
     backups,
     outdatedPlugins,
     isWordPress: signals.isWordPress,
+    report,
   };
   const problems = wordpressProblems(facts, new Date());
 
@@ -574,10 +653,10 @@ export async function performWordPressCheck(monitor: Monitor): Promise<HttpCheck
     wordpress: {
       version: facts.wpVersion,
       latest: latestCore,
-      source: wpeVersion ? "wpengine" : signals.versionSource,
+      source: report?.wordpress.version ? "plugin" : wpeVersion ? "wpengine" : signals.versionSource,
     },
     php_version: facts.phpVersion,
-    themes: signals.themes,
+    themes: report ? report.themes.filter((t) => t.active).map((t) => t.id) : signals.themes,
     plugins,
     wpengine: install
       ? {
@@ -589,6 +668,18 @@ export async function performWordPressCheck(monitor: Monitor): Promise<HttpCheck
           upgrades_deferred_until: install.defer_wordpress_upgrades_until,
         }
       : null,
+    plugin_report: report
+      ? {
+          plugin_version: report.pluginVersion,
+          generated_at: report.generatedAt,
+          updates_checked_at: report.pluginsCheckedAt,
+          memory_limit: report.php.memoryLimit,
+          debug_display: report.debugDisplay,
+          cron_overdue_minutes: report.cron.overdueMinutes,
+          themes: report.themes.map((t) => ({ slug: t.id, name: t.name, version: t.version, latest: t.update, active: t.active })),
+        }
+      : null,
+    plugin_note: pluginResult?.note ?? null,
     wpengine_note: wpengineError ?? (isWpeConfigured() ? (install ? null : "No WP Engine install matches this domain") : "WP Engine API not configured"),
     problems,
   });

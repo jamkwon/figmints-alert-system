@@ -58,6 +58,8 @@ function ConfigRow({ label, children }: { label: string; children: ReactNode }) 
   );
 }
 
+const WP_SOURCES: Record<string, string> = { plugin: "the Website Watch plugin", wpengine: "WP Engine" };
+
 export default async function MonitorDetailPage({ params }: PageProps<"/monitors/[id]">) {
   const view = await findMonitor((await params).id);
   if (!view) notFound();
@@ -183,7 +185,7 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
                       ) : (
                         wp.version && <span className="text-xs text-fig-teal"> · up to date</span>
                       )}
-                      {wp.source && <span className="block text-xs text-slate-500">from {wp.source === "wpengine" ? "WP Engine" : `the site's ${wp.source}`}</span>}
+                      {wp.source && <span className="block text-xs text-slate-500">from {WP_SOURCES[wp.source] ?? `the site's ${wp.source}`}</span>}
                     </ConfigRow>
                     <ConfigRow label="PHP">
                       {wp.php ?? <span className="text-slate-500">Unknown (needs WP Engine)</span>}
@@ -213,19 +215,51 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
                         )}
                       </ConfigRow>
                     )}
-                    {wp.themes.length > 0 && <ConfigRow label="Theme">{wp.themes.join(", ")}</ConfigRow>}
+                    {wp.report ? (
+                      <ConfigRow label="Themes">
+                        {wp.report.themes
+                          .filter((t) => t.active || t.latest)
+                          .map((t) => (
+                            <span key={t.slug} className="block">
+                              {t.name} {t.version}
+                              {t.latest && <span className="text-xs text-amber-700"> → {t.latest}</span>}
+                              {!t.active && <span className="text-xs text-slate-500"> (inactive)</span>}
+                            </span>
+                          ))}
+                      </ConfigRow>
+                    ) : (
+                      wp.themes.length > 0 && <ConfigRow label="Theme">{wp.themes.join(", ")}</ConfigRow>
+                    )}
+                    <ConfigRow label="Site plugin">
+                      {wp.report ? (
+                        <>
+                          Reporting{wp.report.memory_limit && <> · PHP memory {wp.report.memory_limit}</>}
+                          <span className="block text-xs text-slate-500">
+                            WordPress last checked for updates{" "}
+                            {wp.report.updates_checked_at ? timeAgo(wp.report.updates_checked_at) : "never"}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-slate-500">{wp.pluginNote ?? "Not set up (Settings → WordPress plugin)"}</span>
+                      )}
+                    </ConfigRow>
                   </dl>
                   {wp.plugins.length > 0 && (
                     <div className="border-t border-slate-100 px-4 py-3">
                       <div className="mb-1 text-xs font-medium tracking-wide text-slate-500 uppercase">
-                        Plugins seen on the page ({wp.plugins.length})
+                        {wp.report ? "Plugins" : "Plugins seen on the page"} ({wp.plugins.length})
                       </div>
                       <ul className="space-y-0.5 text-xs">
-                        {wp.plugins.map((p) => {
-                          const outdated = p.version && p.latest && compareVersions(p.version, p.latest) < 0;
+                        {wp.plugins.map((p, i) => {
+                          // The site plugin reports WordPress's own update offers; public versions are compared.
+                          const outdated =
+                            p.version && p.latest && (p.source === "plugin" || compareVersions(p.version, p.latest) < 0);
                           return (
-                            <li key={p.slug} className="flex justify-between gap-2">
-                              <span className="text-fig-ink">{p.slug}</span>
+                            <li key={`${p.slug}-${i}`} className="flex justify-between gap-2">
+                              <span className="text-fig-ink">
+                                {p.name ?? p.slug}
+                                {p.active === false && <span className="text-slate-500"> (inactive)</span>}
+                              </span>
                               <span className={outdated ? "text-amber-700" : "text-slate-500"}>
                                 {p.version ?? "version hidden"}
                                 {outdated && ` → ${p.latest}`}
@@ -234,9 +268,12 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
                           );
                         })}
                       </ul>
-                      <p className="mt-2 text-xs text-slate-500">
-                        Only plugins visible from outside, and update info only for free wordpress.org plugins.
-                      </p>
+                      {!wp.report && (
+                        <p className="mt-2 text-xs text-slate-500">
+                          Only plugins visible from outside, and update info only for free wordpress.org plugins. The
+                          Website Watch plugin shows all of them, premium included.
+                        </p>
+                      )}
                     </div>
                   )}
                 </>

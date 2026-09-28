@@ -150,7 +150,15 @@ export interface WordPressInfo {
   source: string | null;
   php: string | null;
   themes: string[];
-  plugins: { slug: string; version: string | null; latest: string | null; source: string }[];
+  plugins: { slug: string; name?: string; version: string | null; latest: string | null; source: string; active?: boolean }[];
+  /** From the Website Watch Health plugin, when it answered. */
+  report: {
+    generated_at: string | null;
+    updates_checked_at: string | null;
+    memory_limit: string | null;
+    themes: { slug: string; name: string; version: string | null; latest: string | null; active: boolean }[];
+  } | null;
+  pluginNote: string | null;
   wpengine: {
     install: string;
     environment: string;
@@ -175,6 +183,8 @@ export function wordpressInfo(metadata: Record<string, unknown> | null | undefin
     themes: Array.isArray(metadata.themes) ? (metadata.themes as string[]) : [],
     plugins: Array.isArray(metadata.plugins) ? (metadata.plugins as WordPressInfo["plugins"]) : [],
     wpengine: (metadata.wpengine as WordPressInfo["wpengine"]) ?? null,
+    report: (metadata.plugin_report as WordPressInfo["report"]) ?? null,
+    pluginNote: typeof metadata.plugin_note === "string" ? metadata.plugin_note : null,
     note: typeof metadata.wpengine_note === "string" ? metadata.wpengine_note : null,
     problems: Array.isArray(metadata.problems) ? (metadata.problems as WordPressInfo["problems"]) : [],
   };
