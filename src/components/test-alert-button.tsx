@@ -1,9 +1,21 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { sendTestAlertAction, type RunCheckResult } from "@/app/actions";
+import { sendTestAlertAction, sendWeeklySummaryAction, type RunCheckResult } from "@/app/actions";
 
-export function TestAlertButton({ disabledReason }: { disabledReason?: string }) {
+const ACTIONS = {
+  test: { run: sendTestAlertAction, label: "Send test alert" },
+  summary: { run: sendWeeklySummaryAction, label: "Send summary now" },
+};
+
+export function TestAlertButton({
+  disabledReason,
+  kind = "test",
+}: {
+  disabledReason?: string;
+  /** Which Slack message to send: a test alert, or this week's summary. */
+  kind?: keyof typeof ACTIONS;
+}) {
   const [pending, startTransition] = useTransition();
   const [result, setResult] = useState<RunCheckResult | null>(null);
 
@@ -17,7 +29,7 @@ export function TestAlertButton({ disabledReason }: { disabledReason?: string })
           setResult(null);
           startTransition(async () => {
             try {
-              setResult(await sendTestAlertAction());
+              setResult(await ACTIONS[kind].run());
             } catch {
               setResult({ ok: false, message: "Could not reach the server." });
             }
@@ -25,7 +37,7 @@ export function TestAlertButton({ disabledReason }: { disabledReason?: string })
         }}
         className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-fig-ink hover:border-fig-plum hover:text-fig-plum disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {pending ? "Sending…" : "Send test alert"}
+        {pending ? "Sending…" : ACTIONS[kind].label}
       </button>
       {result && (
         <span role="status" className={`text-xs ${result.ok ? "text-fig-teal" : "text-red-700"}`}>
