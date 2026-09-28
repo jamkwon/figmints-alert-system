@@ -13,7 +13,7 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 - **Phase 4 (scheduled monitoring): done.** One scheduled worker, triggered every 5 minutes by Supabase `pg_cron`, checks every monitor that is due according to its interval. See **Scheduled checks**.
 - **Staff login: done.** Google sign-in limited to `@figmints.com` accounts. See **Login**.
 - **Phase 5 (operational improvements): done.** Add/edit clients, websites and monitors in the app (with bulk monitor setup), filters, timed snooze, website maintenance windows, uptime percentages, incident history, and automatic check-history cleanup.
-- **Phase 9 (alerts): Slack done.** Critical incidents are posted to a Slack channel when they open and when they resolve. See **Alerts**. Email and Basecamp aren't built yet.
+- **Phase 9 (alerts): Slack done.** Critical incidents are posted to a Slack channel when they open and when they resolve, and a **weekly summary** goes out every Monday. See **Alerts**. Email and Basecamp aren't built yet.
 - **Phase 8 (advanced monitoring): SSL certificate expiry done.** An *SSL Certificate* monitor warns before a site's certificate expires. See **SSL certificates**.
 - **Phase 8: broken link scans done.** A *Broken Links* monitor scans a page's links, images, stylesheets and scripts. See **Broken link scans**.
 - **Phase 8: tracking tag checks done.** A *Tracking Tags* monitor makes sure GTM, GA4, Google Ads, Meta Pixel, LinkedIn Insight and HubSpot tags stay on a page. See **Tracking tags**.
@@ -96,6 +96,7 @@ The schema lives in `supabase/migrations/`. Sample data lives in `supabase/seed.
    - `20260928000000_broken_links.sql` (Phase 8, broken links)
    - `20260929000000_tracking_tags.sql` (Phase 8, tracking tags)
    - `20260930000000_wordpress_health.sql` (Phase 7, WordPress health)
+   - `20261001000000_weekly_summary.sql` (Phase 9, weekly summary)
 3. (Optional) Run `supabase/seed.sql` to load the 6 sample clients. You can re-run it safely; it replaces the earlier sample rows.
 4. Copy the project URL and the secret key into `.env.local`, then restart `npm run dev`.
 
@@ -154,7 +155,8 @@ src/
     auth/               Who may sign in (allowed.ts) and the staff check (session.ts)
     health.ts           Health rules: monitor → website → client roll-up
     validation.ts       Form parsing/validation (SSRF-safe URLs, bulk monitor lines)
-    notify/             Alerts: rules and Slack message format (alerts.ts), sending (send.ts)
+    notify/             Alerts: rules and Slack message format (alerts.ts), sending (send.ts),
+                        weekly summary (weekly.ts, weekly-send.ts)
     monitoring/
       run-check.ts      Performs one HTTP check (redirects, timeout, body limit, error messages)
       evaluate.ts       Pure pass/fail rules for a check (HTTP and SSL)
@@ -475,6 +477,26 @@ Website Watch posts to **one Slack channel**. It's deliberately quiet, so people
 - **At most one alert per incident.** A resolution message is only sent for incidents that were alerted.
 - **Every alert shows in the incident's History,** as "Slack: alert posted" or "Slack alert failed: …".
 - **A failed alert is retried** on the incident's next change.
+
+### Weekly summary
+
+Every **Monday at 9:00** (`APP_TIMEZONE`), one Slack message to the same channel lists what needs work across all active sites, so update warnings become a to-do list instead of a wall of yellow badges:
+
+- **Overview:** websites, uptime over 7 days, incidents opened this week and still open.
+- **Needs attention now:** unresolved incidents, Critical first. Warnings that have their own section below aren't repeated.
+- **Backups:** WordPress Health backup problems.
+- **SSL certificates** expiring within 30 days.
+- **WordPress updates:** per site, core behind, plugin updates (with names; premium ones too when the site plugin is installed) and theme updates. Sites with the most updates first.
+- **Broken links** and **missing tracking tags**.
+- A week with nothing to report gets a short "All clear".
+
+Each section lists up to 15 sites, then "…and N more". Staging sites are marked.
+
+**How it's sent:** the scheduler checks on every run whether this week's summary is due. The first run after Monday 9:00 claims the week in the `weekly_summaries` table and posts it; if the scheduler was down, it goes out as soon as it's back, later that week. The claim makes sure it's posted once, even with overlapping runs. If Slack fails, the claim is released and the next run tries again.
+
+- **Settings → Alerts → Send summary now** posts the current summary right away, e.g. to preview it. It doesn't affect the Monday send.
+- **Setup:** run the migration `20261001000000_weekly_summary.sql`. Nothing else: it uses `SLACK_WEBHOOK_URL` and the existing scheduler.
+- **The first summary** goes out on the first scheduler run after the migration and deploy, if that's after Monday 9:00 that week.
 
 ### Setting up Slack (once)
 

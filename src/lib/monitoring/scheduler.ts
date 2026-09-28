@@ -2,6 +2,7 @@ import "server-only";
 import { SYSTEM_ACTOR, logIncidentEvent } from "@/lib/monitoring/incident-events";
 import { runAndRecordCheck } from "@/lib/monitoring/record";
 import { notifyIncidentChange } from "@/lib/notify/send";
+import { maybeSendWeeklySummary } from "@/lib/notify/weekly-send";
 import { getSupabase } from "@/lib/supabase/server";
 import type { Monitor } from "@/lib/types";
 
@@ -28,6 +29,8 @@ export interface SchedulerRunSummary {
   deferred: number;
   snoozesReopened: number;
   oldChecksDeleted: number | null;
+  /** "sent", "not_due", or what went wrong. */
+  weeklySummary: string | null;
   errors: { monitorId: string; message: string }[];
 }
 
@@ -46,12 +49,18 @@ export async function runDueChecks(): Promise<SchedulerRunSummary> {
     deferred: 0,
     snoozesReopened: 0,
     oldChecksDeleted: null,
+    weeklySummary: null,
     errors: [],
   };
 
   summary.snoozesReopened = await reopenExpiredSnoozes();
-  // First run of each hour only; the scheduler fires every 5 minutes.
-  if (new Date(started).getUTCMinutes() < 5) summary.oldChecksDeleted = await deleteOldChecks();
+  // Once an hour: the run at minute 0 (the scheduler fires every minute or every 5).
+  if (new Date(started).getUTCMinutes() === 0) summary.oldChecksDeleted = await deleteOldChecks();
+  try {
+    summary.weeklySummary = await maybeSendWeeklySummary(new Date(started));
+  } catch (err) {
+    summary.weeklySummary = `failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
 
   const { data, error } = await getSupabase().rpc("claim_due_monitors", { max_count: MAX_MONITORS_PER_RUN });
   if (error) throw new Error(`Failed to claim due monitors: ${error.message}`);

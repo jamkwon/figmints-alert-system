@@ -21,7 +21,7 @@ export function appUrl(): string | null {
   return vercel ? `https://${vercel}` : null;
 }
 
-async function postToSlack(message: { text: string; blocks: unknown[] }): Promise<string | null> {
+export async function postToSlack(message: { text: string; blocks: unknown[] }): Promise<string | null> {
   const url = slackWebhookUrl();
   if (!url) return "SLACK_WEBHOOK_URL is not set";
   try {

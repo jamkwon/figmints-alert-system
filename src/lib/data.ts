@@ -251,6 +251,29 @@ export const getAppData = cache(async (): Promise<AppData> => {
   };
 });
 
+/**
+ * The same view models without the staff check, for scheduled jobs that are
+ * already authenticated by CRON_SECRET (the weekly summary). Pages and actions
+ * must use getAppData.
+ */
+export async function loadSystemAppData(): Promise<Omit<AppData, "source" | "loadedAt">> {
+  return buildAppData(await loadSnapshot());
+}
+
+/** When the last weekly summary went out; null if never, or before its migration ran. */
+export async function getLastWeeklySummary(): Promise<string | null> {
+  await requireStaff();
+  await connection();
+  if (!isSupabaseConfigured()) return null;
+  const { data, error } = await getSupabase()
+    .from("weekly_summaries")
+    .select("sent_at")
+    .order("week_start", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return error ? null : ((data?.sent_at as string | undefined) ?? null);
+}
+
 /** Most recent checks for one monitor, newest first. */
 export async function getCheckHistory(monitorId: string, limit = 50): Promise<CheckResult[]> {
   await requireStaff();

@@ -8,6 +8,7 @@ import type { IncidentDecision } from "@/lib/monitoring/incident-engine";
 import { logIncidentEvent } from "@/lib/monitoring/incident-events";
 import { runAndRecordCheck } from "@/lib/monitoring/record";
 import { notifyIncidentChange, sendTestAlert } from "@/lib/notify/send";
+import { sendWeeklySummary } from "@/lib/notify/weekly-send";
 import { runDueChecks } from "@/lib/monitoring/scheduler";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
 import type { AssignedTeam, Incident, IncidentStatus, Monitor } from "@/lib/types";
@@ -218,6 +219,18 @@ export async function runDueChecksAction(): Promise<RunCheckResult> {
 }
 
 // Alerts ------------------------------------------------------------------------
+
+/** Posts this week's summary right away (Settings); doesn't affect the Monday send. */
+export async function sendWeeklySummaryAction(): Promise<RunCheckResult> {
+  if (!(await isStaffRequest())) return SIGNED_OUT;
+  if (!isSupabaseConfigured()) return { ok: false, message: "Connect Supabase first." };
+  try {
+    const failure = await sendWeeklySummary();
+    return failure ? { ok: false, message: failure } : { ok: true, message: "Summary posted to Slack." };
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "Could not build the summary." };
+  }
+}
 
 /** Posts a test message to the configured Slack channel. */
 export async function sendTestAlertAction(): Promise<RunCheckResult> {

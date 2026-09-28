@@ -6,7 +6,8 @@ import { RunDueChecksButton } from "@/components/run-due-checks-button";
 import { TestAlertButton } from "@/components/test-alert-button";
 import { HealthBadge } from "@/components/status";
 import { Panel, PageHeader, When } from "@/components/ui";
-import { getDataSource, getSchedulerStatus } from "@/lib/data";
+import { getDataSource, getLastWeeklySummary, getSchedulerStatus } from "@/lib/data";
+import { SUMMARY_SSL_DAYS, SUMMARY_WEEKDAY_HOUR } from "@/lib/notify/weekly";
 import { APP_TIMEZONE } from "@/lib/format";
 import { allowedDomains } from "@/lib/auth/session";
 import { SSL_FAILURE_DAYS, SSL_WARNING_DAYS } from "@/lib/monitoring/evaluate";
@@ -64,6 +65,7 @@ export default async function SettingsPage() {
 
   const { dueNow, nextDue, lastCheck } = await getSchedulerStatus();
   const slackConfigured = slackWebhookUrl() !== null;
+  const lastSummary = await getLastWeeklySummary();
   const pluginKeySet = pluginKey() !== null;
   const wpe = source === "sample" ? { ok: false, message: "Not configured" } : await checkWpeConnection();
   const alertLinkBase = appUrl();
@@ -159,6 +161,21 @@ export default async function SettingsPage() {
           </Row>
           <Row label="Links in alerts">
             {alertLinkBase ?? <span className="text-slate-500">No link (set APP_URL)</span>}
+          </Row>
+          <Row label="Weekly summary">
+            Mondays at {SUMMARY_WEEKDAY_HOUR}:00 ({APP_TIMEZONE}): open incidents, backups, certificates expiring within{" "}
+            {SUMMARY_SSL_DAYS} days, WordPress updates, broken links and missing tags.{" "}
+            <span className="text-slate-500">
+              Last sent: {lastSummary ? <When iso={lastSummary} /> : "never"}
+            </span>
+            <div className="mt-2">
+              <TestAlertButton
+                kind="summary"
+                disabledReason={
+                  source === "sample" ? "Connect Supabase first" : !slackConfigured ? "Set SLACK_WEBHOOK_URL first" : undefined
+                }
+              />
+            </div>
           </Row>
           <Row label="Test">
             <TestAlertButton
