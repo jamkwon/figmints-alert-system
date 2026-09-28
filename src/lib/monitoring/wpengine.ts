@@ -1,8 +1,9 @@
-// WP Engine Hosting Platform API client (read-only: installs and backups).
+// WP Engine Hosting Platform API client (read-only: sites, installs and backups).
 // Credentials: WPENGINE_API_USER / WPENGINE_API_PASSWORD from my.wpengine.com → API Access.
 // Server-side only (reads secrets from the environment); never import from client code.
 import { firstSetEnv } from "../supabase/config.ts";
 import type { WpeBackup, WpeInstall } from "./wordpress.ts";
+import type { WpeSite } from "./wpengine-import.ts";
 
 const API = "https://api.wpengineapi.com/v1";
 const TIMEOUT_MS = 15_000;
@@ -79,6 +80,16 @@ export async function listBackups(installId: string): Promise<WpeBackup[]> {
     create_time: str(b.create_time),
     complete_time: str(b.complete_time),
     wordpress_version: str(b.wordpress_version),
+  }));
+}
+
+/** Sites group an install per environment; their names suggest client names on import. */
+export async function listSites(): Promise<WpeSite[]> {
+  return (await listAll("/sites")).map((s) => ({
+    id: String(s.id),
+    name: String(s.name ?? ""),
+    sandbox: s.sandbox === true,
+    installIds: Array.isArray(s.installs) ? (s.installs as { id?: unknown }[]).map((i) => String(i.id)) : [],
   }));
 }
 

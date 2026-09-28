@@ -132,7 +132,7 @@ export interface WpeBackup {
   wordpress_version: string | null;
 }
 
-function bareHost(host: string): string {
+export function bareHost(host: string): string {
   return host.toLowerCase().replace(/^www\./, "").replace(/\.$/, "");
 }
 

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { Metadata } from "next";
 import { connection } from "next/server";
 import { Fragment, type ReactNode } from "react";
@@ -185,6 +186,13 @@ export default async function SettingsPage() {
             WordPress and PHP versions, install status and backups for sites hosted on WP Engine. A WordPress Health
             monitor is critical when there&apos;s no completed backup in {BACKUP_MAX_AGE_HOURS} hours.
           </Row>
+          {wpe.ok && (
+            <Row label="Sites">
+              <Link href="/wpengine" className="text-fig-plum hover:underline">
+                Import sites from WP Engine
+              </Link>
+            </Row>
+          )}
         </dl>
       </Panel>
 
