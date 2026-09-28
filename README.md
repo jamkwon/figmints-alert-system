@@ -19,6 +19,7 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 - **Phase 8: tracking tag checks done.** A *Tracking Tags* monitor makes sure GTM, GA4, Google Ads, Meta Pixel, LinkedIn Insight and HubSpot tags stay on a page. See **Tracking tags**.
 - **Phase 7 (WordPress / WP Engine), Stage A: done.** A *WordPress Health* monitor checks WordPress and PHP versions, visible plugins, and WP Engine install status and backups. See **WordPress health**. Evaluation: `docs/phase-7-wordpress-evaluation.md`.
 - **Phase 7: import from WP Engine done.** **Clients → Import from WP Engine** adds production sites from WP Engine as clients, with uptime, SSL and WordPress checks. See **Importing sites from WP Engine**.
+- **Phase 7, Stage B (WordPress plugin): done.** An optional read-only plugin lets WordPress Health checks see every plugin and theme with its available update (premium included), exact WordPress/PHP versions, debug mode and WP-Cron. See **WordPress plugin**.
 
 Running checks and updating incidents require Supabase. On sample data those controls are disabled.
 
@@ -56,6 +57,7 @@ Copy `.env.example` to `.env.local`:
 | `SLACK_WEBHOOK_URL` | For alerts | Slack Incoming Webhook (`https://hooks.slack.com/...`). **Secret.** No alerts are sent without it. |
 | `APP_URL` | No | Public app address for "Open incident" links in alerts. On Vercel the production domain is detected automatically. |
 | `WPENGINE_API_USER` / `WPENGINE_API_PASSWORD` | For WP Engine data | API credentials from my.wpengine.com → API Access. **Secret.** Used read-only (installs and backups). |
+| `WEBSITE_WATCH_PLUGIN_KEY` | For the WordPress plugin | Private key (64 hex characters) that signs requests to the site plugin. **Secret.** Changing it means re-installing the plugin. `WEBSITE_WATCH_PLUGIN_TOKEN` (its earlier name) also works. |
 | `APP_TIMEZONE` | No | Timezone for displayed times. Default `America/New_York`. |
 
 Both Supabase variables must be set for the app to use Supabase. Settings shows which data source is active and which variable names it found.
@@ -161,6 +163,7 @@ src/
       wordpress.ts      WordPress detection, version compare, backup/PHP rules
       wpengine.ts       WP Engine API client (read-only: sites, installs, backups)
       wpengine-import.ts  Which WP Engine installs aren't monitored yet (import page)
+      wp-plugin.ts      The Website Watch Health WordPress plugin (PHP source, request signing)
       url-safety.ts     SSRF protection
       incident-engine.ts Pure rules: when to open, update or resolve an incident
       record.ts         Runs a check, saves the result, applies incident rules
@@ -247,7 +250,48 @@ A **WordPress Health** monitor combines three sources:
 
 - **Adding one:** tick **Also check WordPress health** on **Add client** or **Add monitors**. It's checked every 6 hours, one per website. The **One monitor** tab also offers the *WordPress Health* type.
 - **Where you see it:** the monitor page's **WordPress** panel shows the versions and where they came from, PHP, the WP Engine install, the last backup, the theme, and each visible plugin with its version and any update.
-- **Limits:** plugin updates are only known for free wordpress.org plugins whose version is visible from outside. Premium plugins (Gravity Forms, ACF Pro…) and hidden versions need the Stage B plugin described in the evaluation doc. Sites not on WP Engine get public signals only.
+- **Limits:** without the **WordPress plugin**, plugin updates are only known for free wordpress.org plugins whose version is visible from outside. Install the plugin on a site to see all of them, premium included. Sites not on WP Engine get no backup data.
+
+#### WordPress plugin
+
+**Website Watch Health** is a small **read-only WordPress plugin**. With it, a WordPress Health check also knows:
+
+- **every plugin and theme**, active or not, with the update WordPress offers, **including premium plugins** that use WordPress's update system with a valid license (Gravity Forms, ACF Pro, Events Calendar Pro…);
+- the exact WordPress and PHP versions and PHP memory limit;
+- whether **debug errors are shown to visitors**, and whether **WP-Cron** is running.
+
+Extra warnings when it's installed: theme updates, debug errors shown to visitors, WP-Cron more than 2 hours behind, and WordPress not having checked for updates in 3 days (its update list would be stale). Plugin updates count toward the existing "plugins with updates available" warning.
+
+**How it stays safe**
+
+- **Read-only.** It only reads what WordPress's own update checks already stored. It never updates, installs or changes anything, never calls out, and takes no input besides two request headers. (The one thing it writes is a short-lived note of each signature it has accepted, so it can refuse a replay.)
+- **Signed requests.** Website Watch signs every request with an **Ed25519 private key** that never leaves Website Watch. The plugin holds only the matching **public key**, so the plugin file contains no secret: copying it gives an attacker nothing.
+- **Each signature is tied to one site, one moment, one use.** It covers the site's own domain (taken from WordPress's settings, not the request), and a timestamp the plugin accepts for 5 minutes, and the plugin accepts it only once. A captured request, or one sent to the wrong server (a redirect, an expired domain), is useless on any other site, later, or a second time. Website Watch also never follows redirects with these requests.
+- **One narrow endpoint:** `POST /wp-json/website-watch/v1/status`. Everything else gets `401`, GET isn't answered, and responses carry `no-store` so no page cache (including WP Engine's) keeps a report. The endpoint isn't listed in the site's public `/wp-json/` index, and opening the plugin file directly shows nothing.
+- **Never replaced by a stranger's plugin.** It declares `Update URI: false`, so WordPress never offers a wordpress.org plugin with the same folder name as an "update" for it.
+- **Can't break a site by being installed twice.** Two copies (e.g. in different folders) load only once, instead of a PHP "cannot redeclare" crash.
+- **Tested** on WordPress 7.1 / PHP 8.3 and WordPress 6.8 / PHP 7.4 against: no or garbage signature, wrong key, tampered signature or timestamp, signatures for another site, 10 minutes old or in the future, replay, oversized headers, GET, and two copies installed. All refused, or handled, as expected.
+
+**Setting it up (once)**
+
+1. Create a private key: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` (64 hex characters).
+2. Add it as `WEBSITE_WATCH_PLUGIN_KEY` in Vercel (Production, **Sensitive**) and in `.env.local`. Redeploy. Use the **same** value in both, so a plugin downloaded locally also works for production.
+3. **Settings → WordPress plugin → Download** `website-watch-health.zip`. The public key is already inside.
+
+**Installing it on a site**
+
+- **One site:** in WordPress admin, **Plugins → Add New Plugin → Upload Plugin**, choose `website-watch-health.zip`, **Install Now**, then **Activate**.
+- **Many sites on WP Engine:** with SSH Gateway access (WP-CLI is available there), per install:
+  ```bash
+  scp website-watch-health.zip INSTALL@INSTALL.ssh.wpengine.net:sites/INSTALL/
+  ssh INSTALL@INSTALL.ssh.wpengine.net "cd sites/INSTALL && wp plugin install website-watch-health.zip --activate && rm website-watch-health.zip"
+  ```
+- It shows in the site's plugins list as **Website Watch Health**, so anyone with admin access can deactivate or delete it. Checks then fall back to public signals and the monitor page says the plugin isn't installed.
+- **Check it:** on the next WordPress Health check, the monitor page's **Site plugin** row says *Reporting*. **Run check** to see it right away.
+
+**Updating it:** WordPress won't update it automatically (see `Update URI` above). Upload the new zip; WordPress offers **Replace current with uploaded**.
+
+If you change the key, download the plugin again and re-install it on every site; until then those sites show *rejected the request* and fall back to public signals. A site whose clock is more than 5 minutes off is also refused. To remove it, deactivate and delete it in **Plugins**.
 
 #### Connecting WP Engine (once)
 
@@ -481,6 +525,7 @@ Staff sign in with **Google**. Only accounts on an allowed domain (`figmints.com
 - **SSRF protection** (`src/lib/monitoring/url-safety.ts`): only `http`/`https` on ports 80, 443, 8080 or 8443; no credentials in URLs; no internal hostnames (`localhost`, `*.local`, single-word names). Every DNS answer is checked **at connection time**, so private, loopback, link-local (including the `169.254.169.254` cloud metadata address), CGNAT, multicast and reserved IPv4/IPv6 addresses are refused, even after a redirect or a DNS change.
 - The Run check action accepts only a monitor ID and always fetches the URL stored in the database. It can't be used to request arbitrary addresses. Only signed-in staff can run it.
 - The scheduler endpoint refuses every request unless `CRON_SECRET` (16+ characters) is set and sent as `Authorization: Bearer …`. The comparison is constant-time. It only checks monitors already in the database.
+- The WordPress plugin's private key stays server-side; sites hold only the public key. Each request is signed for one site, a 5-minute window and one use, and redirects aren't followed.
 - WP Engine credentials are used server-side only, for read-only calls to the fixed `api.wpengineapi.com` host.
 - Alerts are only posted to a `hooks.slack.com` webhook from `SLACK_WEBHOOK_URL`. Client names, titles and errors are escaped before they go into Slack formatting.
 - `claim_due_monitors` can only be called with the secret key; execution is revoked from the public `anon` and `authenticated` roles.
