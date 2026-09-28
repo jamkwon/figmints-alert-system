@@ -12,6 +12,7 @@ import {
   displayUrl,
   linkScanInfo,
   trackingInfo,
+  wordpressInfo,
   formatDate,
   formatDateTime,
   formatUptime,
@@ -22,6 +23,7 @@ import { failingSince } from "@/lib/health";
 import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS, SEVERITY_LABELS, formatInterval } from "@/lib/labels";
 import { DEFAULT_MAX_RESPONSE_TIME_MS, SSL_FAILURE_DAYS, SSL_WARNING_DAYS } from "@/lib/monitoring/evaluate";
 import { TRACKING_TAGS, TRACKING_TAG_KEYS } from "@/lib/monitoring/tracking";
+import { MIN_SUPPORTED_PHP, compareVersions } from "@/lib/monitoring/wordpress";
 
 // Run check can start a broken link scan, which takes up to ~40 seconds.
 export const maxDuration = 60;
@@ -64,6 +66,8 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
   const isSsl = monitor.monitor_type === "ssl_expiry";
   const isLinkScan = monitor.monitor_type === "broken_links";
   const isTracking = monitor.monitor_type === "tracking_tags";
+  const isWordPress = monitor.monitor_type === "wordpress_health";
+  const wp = isWordPress ? wordpressInfo(summary?.last_metadata) : null;
   const tags = isTracking ? trackingInfo(summary?.last_metadata) : null;
   const cert = isSsl ? certificateInfo(summary?.last_metadata) : null;
   const scan = isLinkScan ? linkScanInfo(summary?.last_metadata) : null;
@@ -165,7 +169,80 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
         </Panel>
 
         <div className="space-y-6">
-          {isTracking ? (
+          {isWordPress ? (
+            <Panel title="WordPress">
+              {!wp ? (
+                <p className="px-4 py-4 text-sm text-slate-500">Not checked yet.</p>
+              ) : (
+                <>
+                  <dl>
+                    <ConfigRow label="WordPress">
+                      {wp.version ?? <span className="text-slate-500">Hidden</span>}
+                      {wp.version && wp.latest && compareVersions(wp.version, wp.latest) < 0 ? (
+                        <span className="text-xs text-amber-700"> · {wp.latest} available</span>
+                      ) : (
+                        wp.version && <span className="text-xs text-fig-teal"> · up to date</span>
+                      )}
+                      {wp.source && <span className="block text-xs text-slate-500">from {wp.source === "wpengine" ? "WP Engine" : `the site's ${wp.source}`}</span>}
+                    </ConfigRow>
+                    <ConfigRow label="PHP">
+                      {wp.php ?? <span className="text-slate-500">Unknown (needs WP Engine)</span>}
+                      {wp.php && compareVersions(wp.php, MIN_SUPPORTED_PHP) < 0 && (
+                        <span className="text-xs text-amber-700"> · unsupported</span>
+                      )}
+                    </ConfigRow>
+                    <ConfigRow label="WP Engine">
+                      {wp.wpengine ? (
+                        <>
+                          {wp.wpengine.install} · {wp.wpengine.environment}
+                          {wp.wpengine.status !== "active" && <span className="text-amber-700"> · {wp.wpengine.status}</span>}
+                        </>
+                      ) : (
+                        <span className="text-slate-500">{wp.note ?? "Not linked"}</span>
+                      )}
+                    </ConfigRow>
+                    {wp.wpengine && (
+                      <ConfigRow label="Last backup">
+                        {wp.wpengine.last_backup_at ? (
+                          <When iso={wp.wpengine.last_backup_at} />
+                        ) : (
+                          <span className="text-red-700">None completed</span>
+                        )}
+                        {wp.wpengine.latest_backup_status && wp.wpengine.latest_backup_status !== "completed" && (
+                          <span className="block text-xs text-red-700">Latest: {wp.wpengine.latest_backup_status}</span>
+                        )}
+                      </ConfigRow>
+                    )}
+                    {wp.themes.length > 0 && <ConfigRow label="Theme">{wp.themes.join(", ")}</ConfigRow>}
+                  </dl>
+                  {wp.plugins.length > 0 && (
+                    <div className="border-t border-slate-100 px-4 py-3">
+                      <div className="mb-1 text-xs font-medium tracking-wide text-slate-500 uppercase">
+                        Plugins seen on the page ({wp.plugins.length})
+                      </div>
+                      <ul className="space-y-0.5 text-xs">
+                        {wp.plugins.map((p) => {
+                          const outdated = p.version && p.latest && compareVersions(p.version, p.latest) < 0;
+                          return (
+                            <li key={p.slug} className="flex justify-between gap-2">
+                              <span className="text-fig-ink">{p.slug}</span>
+                              <span className={outdated ? "text-amber-700" : "text-slate-500"}>
+                                {p.version ?? "version hidden"}
+                                {outdated && ` → ${p.latest}`}
+                              </span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                      <p className="mt-2 text-xs text-slate-500">
+                        Only plugins visible from outside, and update info only for free wordpress.org plugins.
+                      </p>
+                    </div>
+                  )}
+                </>
+              )}
+            </Panel>
+          ) : isTracking ? (
             <Panel title="Tracking tags" aside={<Link href={`/monitors/${monitor.id}/edit`} className="text-fig-plum hover:underline">Choose tags</Link>}>
               <ul className="divide-y divide-slate-100">
                 {TRACKING_TAG_KEYS.filter((t) => monitor.expected_tags.includes(t) || tags?.found[t]).map((t) => {
@@ -270,7 +347,7 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
               <ConfigRow label="Website">
                 {displayUrl(website.url)} · {ENVIRONMENT_LABELS[website.environment]}
               </ConfigRow>
-              {!isSsl && !isLinkScan && !isTracking && (
+              {!isSsl && !isLinkScan && !isTracking && !isWordPress && (
                 <>
                   <ConfigRow label="Expected status">
                     {monitor.expected_status_code ?? <span className="text-slate-500">200–399 (default)</span>}

@@ -143,3 +143,39 @@ export function trackingInfo(metadata: Record<string, unknown> | null | undefine
   const expected = Array.isArray(metadata.tags_expected) ? (metadata.tags_expected as string[]) : [];
   return { found, expected, missing: expected.filter((t) => !found[t]) };
 }
+
+export interface WordPressInfo {
+  version: string | null;
+  latest: string | null;
+  source: string | null;
+  php: string | null;
+  themes: string[];
+  plugins: { slug: string; version: string | null; latest: string | null; source: string }[];
+  wpengine: {
+    install: string;
+    environment: string;
+    status: string;
+    last_backup_at: string | null;
+    latest_backup_status: string | null;
+    upgrades_deferred_until: string | null;
+  } | null;
+  note: string | null;
+  problems: { level: "critical" | "warning"; message: string }[];
+}
+
+/** Results of a WordPress health check from its latest check metadata. */
+export function wordpressInfo(metadata: Record<string, unknown> | null | undefined): WordPressInfo | null {
+  if (!metadata || typeof metadata.wordpress !== "object" || metadata.wordpress === null) return null;
+  const wp = metadata.wordpress as { version?: string | null; latest?: string | null; source?: string | null };
+  return {
+    version: wp.version ?? null,
+    latest: wp.latest ?? null,
+    source: wp.source ?? null,
+    php: typeof metadata.php_version === "string" ? metadata.php_version : null,
+    themes: Array.isArray(metadata.themes) ? (metadata.themes as string[]) : [],
+    plugins: Array.isArray(metadata.plugins) ? (metadata.plugins as WordPressInfo["plugins"]) : [],
+    wpengine: (metadata.wpengine as WordPressInfo["wpengine"]) ?? null,
+    note: typeof metadata.wpengine_note === "string" ? metadata.wpengine_note : null,
+    problems: Array.isArray(metadata.problems) ? (metadata.problems as WordPressInfo["problems"]) : [],
+  };
+}

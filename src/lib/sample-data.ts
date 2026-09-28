@@ -252,6 +252,47 @@ export function buildSampleData(now: Date = new Date()): {
     };
   }
 
+  monitor(18, 3, "WordPress Health", "wordpress_health", "https://bluefinchbakery.example/",
+    { interval: 360, severity: "critical", passingLatestMin: 400,
+      failures: fails("warning", 200, "WordPress 7.0.5 (latest is 7.1.2); 1 plugin with updates available", [[30, 2100]]) });
+  monitor(19, 2, "WordPress Health", "wordpress_health", "https://northgatetitle.example/",
+    { interval: 360, severity: "critical", passingLatestMin: 380,
+      failures: fails("failed", 200, "Latest backup was aborted", [[20, 1900]]) });
+  for (const check of checkResults) {
+    const blueFinch = check.monitor_id === mid(18);
+    if (!blueFinch && check.monitor_id !== mid(19)) continue;
+    const backupAt = ago(blueFinch ? 360 : 1500);
+    check.metadata = {
+      wordpress: { version: blueFinch ? "7.0.5" : "7.1.2", latest: "7.1.2", source: "wpengine" },
+      php_version: blueFinch ? "8.3" : "8.2",
+      themes: blueFinch ? ["kadence"] : ["astra"],
+      plugins: blueFinch
+        ? [
+            { slug: "woocommerce", version: "10.1.2", latest: "10.1.2", source: "asset" },
+            { slug: "wordpress-seo", version: "28.1", latest: "28.5", source: "asset" },
+            { slug: "gravityforms", version: "2.10.2", latest: null, source: "asset" },
+          ]
+        : [{ slug: "wordpress-seo", version: null, latest: null, source: "rest" }],
+      wpengine: {
+        install: blueFinch ? "bluefinchprod" : "northgateprod",
+        environment: "production",
+        status: "active",
+        last_backup_at: backupAt,
+        latest_backup_status: !check.passed && !blueFinch ? "aborted" : "completed",
+        upgrades_deferred_until: null,
+      },
+      wpengine_note: null,
+      problems: check.passed
+        ? []
+        : blueFinch
+          ? [
+              { level: "warning", message: "WordPress 7.0.5 (latest is 7.1.2)" },
+              { level: "warning", message: "1 plugin with updates available" },
+            ]
+          : [{ level: "critical", message: "Latest backup was aborted" }],
+    };
+  }
+
   // Link scans record what they checked and what was broken.
   for (const check of checkResults) {
     if (check.monitor_id !== mid(16)) continue;
