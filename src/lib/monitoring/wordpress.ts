@@ -184,6 +184,17 @@ export interface PluginReportItem {
   update: string | null;
 }
 
+export interface FatalError {
+  firstAt: string | null;
+  lastAt: string | null;
+  /** Approximate: the plugin records at most one error every 10 seconds. */
+  count: number;
+  message: string;
+  /** Relative to the site, e.g. "wp-content/plugins/gravityforms/x.php". */
+  file: string;
+  line: number;
+}
+
 export interface PluginReport {
   pluginVersion: string | null;
   generatedAt: string | null;
@@ -194,6 +205,8 @@ export interface PluginReport {
   plugins: PluginReportItem[];
   pluginsCheckedAt: string | null;
   themes: PluginReportItem[];
+  /** Fatal PHP errors from the last 7 days; null when the plugin is older than 1.2. */
+  fatalErrors: FatalError[] | null;
 }
 
 const MAX_REPORT_ITEMS = 300;
@@ -231,13 +244,52 @@ export function parsePluginReport(body: unknown): PluginReport | null {
     plugins: reportItems(r.plugins, "file"),
     pluginsCheckedAt: text(r.plugins_checked_at, 40),
     themes: reportItems(r.themes, "slug"),
+    fatalErrors: Array.isArray(r.fatal_errors) ? fatalErrors(r.fatal_errors) : null,
   };
+}
+
+function fatalErrors(v: unknown[]): FatalError[] {
+  return v.slice(0, 50).flatMap((raw) => {
+    const e = obj(raw);
+    const message = text(e.message, 300);
+    if (!message) return [];
+    const count = typeof e.count === "number" && Number.isFinite(e.count) ? Math.max(1, Math.round(e.count)) : 1;
+    const line = typeof e.line === "number" && Number.isFinite(e.line) ? Math.max(0, Math.round(e.line)) : 0;
+    return [{ firstAt: text(e.first_at, 40), lastAt: text(e.last_at, 40), count, message, file: text(e.file, 300) ?? "", line }];
+  });
+}
+
+/** Where an error happened: the plugin or theme folder in its path, or WordPress itself. */
+export function fatalErrorSource(file: string): { kind: "plugin" | "theme" | "core" | "other"; slug: string | null } {
+  const plugin = file.match(/^wp-content\/(?:mu-)?plugins\/([^/]+)/);
+  if (plugin) return { kind: "plugin", slug: plugin[1].replace(/\.php$/, "") };
+  const theme = file.match(/^wp-content\/themes\/([^/]+)/);
+  if (theme) return { kind: "theme", slug: theme[1] };
+  if (/^wp-(includes|admin)\//.test(file)) return { kind: "core", slug: null };
+  return { kind: "other", slug: null };
+}
+
+/** A readable name for where an error happened, using the report's plugin and theme names. */
+export function fatalErrorSourceName(file: string, report: Pick<PluginReport, "plugins" | "themes">): string {
+  const source = fatalErrorSource(file);
+  if (source.kind === "core") return "WordPress core";
+  if (source.kind === "plugin") {
+    const match = report.plugins.find((p) => p.id.split("/")[0].replace(/\.php$/, "") === source.slug);
+    return match?.name ?? `plugin ${source.slug}`;
+  }
+  if (source.kind === "theme") {
+    const match = report.themes.find((t) => t.id === source.slug);
+    return match?.name ?? `theme ${source.slug}`;
+  }
+  return file || "unknown file";
 }
 
 /** WP-Cron this far behind means WordPress's own update checks aren't running. */
 export const CRON_OVERDUE_WARNING_MINUTES = 120;
 /** WordPress normally checks for updates twice a day. */
 export const UPDATES_STALE_HOURS = 72;
+/** Fatal errors this recent make the check fail (Critical by default, so Slack hears about it). */
+export const FATAL_WINDOW_HOURS = 24;
 
 // Evaluation ------------------------------------------------------------------------
 
@@ -284,6 +336,20 @@ export function wordpressProblems(f: WordPressFacts, now: Date): WordPressProble
   if (f.outdatedPlugins.length > 0) {
     const n = f.outdatedPlugins.length;
     problems.push({ level: "warning", message: `${n} plugin${n === 1 ? "" : "s"} with updates available` });
+  }
+  if (f.report?.fatalErrors) {
+    const report = f.report;
+    const recent = (report.fatalErrors ?? []).filter(
+      (e) => e.lastAt && (now.getTime() - new Date(e.lastAt).getTime()) / 3_600_000 <= FATAL_WINDOW_HOURS,
+    );
+    if (recent.length > 0) {
+      const total = recent.reduce((n, e) => n + e.count, 0);
+      const sources = [...new Set(recent.map((e) => fatalErrorSourceName(e.file, report)))];
+      problems.push({
+        level: "critical",
+        message: `${total} fatal PHP error${total === 1 ? "" : "s"} in the last ${FATAL_WINDOW_HOURS} hours (${sources.join(", ")})`,
+      });
+    }
   }
   if (f.report) {
     const themes = f.report.themes.filter((t) => t.update).length;

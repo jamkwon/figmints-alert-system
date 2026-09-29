@@ -128,3 +128,10 @@ test("WordPress health monitors get backup- or update-specific titles", () => {
   assert.equal(u.kind === "open" && u.incident.title, "WordPress updates needed on Main site");
   assert.equal(u.kind === "open" && u.incident.severity, "warning");
 });
+
+test("WordPress PHP errors get their own incident title", () => {
+  assert.equal(
+    titleForCheck(fail("t", "2 fatal PHP errors in the last 24 hours (Gravity Forms)", 200), "WordPress Health", "wordpress_health"),
+    "PHP errors on WordPress Health",
+  );
+});

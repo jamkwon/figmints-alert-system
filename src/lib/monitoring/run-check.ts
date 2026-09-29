@@ -19,6 +19,7 @@ import { UnsafeUrlError, safeLookup, validateTargetUrl } from "./url-safety.ts";
 import {
   compareVersions,
   detectWordPress,
+  fatalErrorSourceName,
   evaluateWordPress,
   matchInstall,
   parsePluginReport,
@@ -677,6 +678,17 @@ export async function performWordPressCheck(monitor: Monitor): Promise<HttpCheck
           debug_display: report.debugDisplay,
           cron_overdue_minutes: report.cron.overdueMinutes,
           themes: report.themes.map((t) => ({ slug: t.id, name: t.name, version: t.version, latest: t.update, active: t.active })),
+          // null: the site's plugin is older than 1.2 and doesn't record PHP errors.
+          fatal_errors:
+            report.fatalErrors?.map((e) => ({
+              first_at: e.firstAt,
+              last_at: e.lastAt,
+              count: e.count,
+              message: e.message,
+              file: e.file,
+              line: e.line,
+              source: fatalErrorSourceName(e.file, report),
+            })) ?? null,
         }
       : null,
     plugin_note: pluginResult?.note ?? null,
