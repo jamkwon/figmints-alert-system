@@ -4,6 +4,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
 import { PrintButton } from "@/components/print-button";
+import { UptimeBars } from "@/components/uptime-bars";
 import { SeverityBadge } from "@/components/status";
 import { table } from "@/components/ui";
 import { getReportInput } from "@/lib/data";
@@ -212,6 +213,7 @@ export default async function MonthlyReportPage({ params, searchParams }: PagePr
               <tr>
                 <th className={table.th}>Website</th>
                 <th className={table.th}>Uptime</th>
+                <th className={`${table.th} w-[40%]`}>Each day</th>
                 <th className={table.th}>Checks</th>
               </tr>
             </thead>
@@ -227,6 +229,9 @@ export default async function MonthlyReportPage({ params, searchParams }: PagePr
                   </td>
                   <td className={table.td}>
                     <Pill tone={uptimeTone(w.uptime)}>{uptimeText(w.uptime)}</Pill>
+                  </td>
+                  <td className={table.td}>
+                    <UptimeBars bars={w.days} compact />
                   </td>
                   <td className={`${table.td} text-slate-600`}>{w.checks.toLocaleString("en-US")}</td>
                 </tr>

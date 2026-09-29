@@ -7,9 +7,11 @@ import { MaintenanceControl } from "@/components/maintenance-control";
 import { MonitorTable } from "@/components/monitor-table";
 import { HealthBadge, HealthDot } from "@/components/status";
 import { EmptyState, LinkButton, Panel, PageHeader, When } from "@/components/ui";
-import { getAppData } from "@/lib/data";
-import { displayUrl, formatDateTime, formatUptime, isInFuture } from "@/lib/format";
-import { ENVIRONMENT_LABELS } from "@/lib/labels";
+import { UptimeBars, UptimeLegend } from "@/components/uptime-bars";
+import { getAppData, getDailyUptime } from "@/lib/data";
+import { dayBars, recentDays } from "@/lib/uptime-history";
+import { APP_TIMEZONE, displayUrl, formatDateTime, formatUptime, isInFuture } from "@/lib/format";
+import { ENVIRONMENT_LABELS, countsTowardUptime } from "@/lib/labels";
 
 async function findClient(id: string) {
   const data = await getAppData();
@@ -40,6 +42,14 @@ export default async function ClientDetailPage({ params }: PageProps<"/clients/[
   if (!view) notFound();
 
   const { client, health, websites, monitors, incidents, activeIncidents, lastCheckedAt, uptime7d } = view;
+  // Uptime history: each website's page-load monitors, added up per day.
+  const pageLoad = monitors.filter((m) => countsTowardUptime(m.monitor.monitor_type) && m.monitor.active);
+  const daily = await getDailyUptime(pageLoad.map((m) => m.monitor.id));
+  const days = recentDays(new Date(), 90, APP_TIMEZONE);
+  const websitesWithUptime = websites.flatMap(({ website }) => {
+    const ids = pageLoad.filter((m) => m.website.id === website.id).map((m) => m.monitor.id);
+    return ids.length ? [{ website, bars: dayBars(days, ids.flatMap((id) => daily.get(id) ?? [])) }] : [];
+  });
   const uptime = formatUptime(uptime7d.passed, uptime7d.checks);
   const disabledReason = sampleMode ? "Connect Supabase to make changes" : undefined;
 
@@ -102,6 +112,24 @@ export default async function ClientDetailPage({ params }: PageProps<"/clients/[
           {uptime && <div className="text-xs text-slate-500">{uptime7d.checks} checks</div>}
         </StatCard>
       </div>
+
+      {websitesWithUptime.length > 0 && (
+        <Panel title="Uptime history" aside="Last 90 days · page-load checks" className="mb-6">
+          <div className="space-y-4 px-4 py-4">
+            {websitesWithUptime.map(({ website, bars }) => (
+              <div key={website.id}>
+                <div className="mb-1 flex items-baseline justify-between gap-2 text-sm">
+                  <span className="font-medium text-fig-ink">
+                    {website.name} <span className="font-normal text-slate-500">· {displayUrl(website.url)}</span>
+                  </span>
+                </div>
+                <UptimeBars bars={bars} />
+              </div>
+            ))}
+            <UptimeLegend />
+          </div>
+        </Panel>
+      )}
 
       <Panel title="Websites" aside={`${websites.length} total`} className="mb-6">
         {websites.length === 0 ? (

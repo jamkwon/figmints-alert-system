@@ -113,8 +113,27 @@ export function failingVitals(field: PageSpeedResult["field"]): string[] {
   return failing;
 }
 
-/** Warning below the minimum score or when real-user Core Web Vitals fail; never Failed. */
-export function evaluatePageSpeed(r: PageSpeedResult, minScore: number, responseTimeMs: number): CheckOutcome {
+/** A drop of this many points below last week's typical score warns (Lighthouse scores wobble by a few). */
+export const SCORE_DROP_POINTS = 15;
+
+/** Last week's typical score: the median of its scores, when there are at least two. */
+export function scoreBaseline(previous: number[]): number | null {
+  const scores = previous.filter((s) => Number.isFinite(s)).sort((a, b) => a - b);
+  if (scores.length < 2) return null;
+  const mid = Math.floor(scores.length / 2);
+  return Math.round(scores.length % 2 ? scores[mid] : (scores[mid - 1] + scores[mid]) / 2);
+}
+
+/**
+ * Warning below the minimum score, after a sharp drop from last week's typical
+ * score, or when real-user Core Web Vitals fail; never Failed.
+ */
+export function evaluatePageSpeed(
+  r: PageSpeedResult,
+  minScore: number,
+  responseTimeMs: number,
+  baseline: number | null = null,
+): CheckOutcome {
   const base = { http_status: null, response_time_ms: Math.round(responseTimeMs) };
   const warnings: string[] = [];
   if (r.runtimeError) warnings.push(`PageSpeed couldn't test the page (${r.runtimeError})`);
@@ -122,6 +141,9 @@ export function evaluatePageSpeed(r: PageSpeedResult, minScore: number, response
   else if (r.score < minScore) {
     const lcp = r.lab.lcpMs !== null ? `, LCP ${seconds(r.lab.lcpMs)}` : "";
     warnings.push(`Performance score ${r.score}/100 on mobile (below ${minScore}${lcp})`);
+  }
+  if (r.score !== null && baseline !== null && r.score <= baseline - SCORE_DROP_POINTS) {
+    warnings.push(`Score dropped to ${r.score} from about ${baseline} last week`);
   }
   const vitals = failingVitals(r.field);
   if (vitals.length > 0) {

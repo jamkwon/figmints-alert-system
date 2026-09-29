@@ -17,6 +17,7 @@ function form(values: Record<string, string>) {
     warn_on_updates: "on",
     min_performance_score: "50",
     summary_enabled: "on",
+    monthly_reports_enabled: "on",
     summary_weekday: "1",
     summary_hour: "9",
     ...values,

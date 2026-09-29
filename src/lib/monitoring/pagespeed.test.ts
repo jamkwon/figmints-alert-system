@@ -69,3 +69,15 @@ test("warnings: score below the minimum, Core Web Vitals failing, Lighthouse err
   assert.match(evaluatePageSpeed(broken, 50, 1).error_message!, /couldn't test the page \(FAILED_DOCUMENT_REQUEST/);
   assert.equal(evaluatePageSpeed(broken, 50, 1).status, "warning", "never Failed: other monitors cover downtime");
 });
+
+test("a sharp drop from last week's typical score warns", async () => {
+  const { scoreBaseline, SCORE_DROP_POINTS } = await import("./pagespeed.ts");
+  assert.equal(scoreBaseline([64, 70, 66]), 66, "median");
+  assert.equal(scoreBaseline([60, 70]), 65);
+  assert.equal(scoreBaseline([61]), null, "one score isn't a trend");
+  const r = { ...parsePageSpeed(RESPONSE), field: null };
+  const at = (score: number, baseline: number | null) => evaluatePageSpeed({ ...r, score }, 40, 1, baseline);
+  assert.equal(at(66 - SCORE_DROP_POINTS + 1, 66).status, "passed", "a small wobble is fine");
+  assert.equal(at(66 - SCORE_DROP_POINTS, 66).error_message, "Score dropped to 51 from about 66 last week");
+  assert.equal(at(51, null).status, "passed", "no history, no comparison");
+});

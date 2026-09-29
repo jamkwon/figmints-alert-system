@@ -9,6 +9,7 @@ import { logIncidentEvent } from "@/lib/monitoring/incident-events";
 import { runAndRecordCheck } from "@/lib/monitoring/record";
 import { notifyIncidentChange, sendTestAlert } from "@/lib/notify/send";
 import { sendWeeklySummary } from "@/lib/notify/weekly-send";
+import { sendMonthlyReports } from "@/lib/notify/monthly-send";
 import { runDueChecks } from "@/lib/monitoring/scheduler";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
 import type { AssignedTeam, Incident, IncidentStatus, Monitor } from "@/lib/types";
@@ -229,6 +230,18 @@ export async function sendWeeklySummaryAction(): Promise<RunCheckResult> {
     return failure ? { ok: false, message: failure } : { ok: true, message: "Summary posted to Slack." };
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : "Could not build the summary." };
+  }
+}
+
+/** Posts last month's client reports to Slack now (Settings); doesn't affect the posting on the 1st. */
+export async function sendMonthlyReportsAction(): Promise<RunCheckResult> {
+  if (!(await isStaffRequest())) return SIGNED_OUT;
+  if (!isSupabaseConfigured()) return { ok: false, message: "Connect Supabase first." };
+  try {
+    const failure = await sendMonthlyReports();
+    return failure ? { ok: false, message: failure } : { ok: true, message: "Last month's reports posted to Slack." };
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "Could not build the reports." };
   }
 }
 

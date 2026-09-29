@@ -6,8 +6,12 @@ import { CheckHistoryTable } from "@/components/check-history-table";
 import { RunCheckButton } from "@/components/run-check-button";
 import { CheckStatusBadge, HealthBadge, IncidentStatusBadge, SeverityBadge } from "@/components/status";
 import { LinkButton, Panel, PageHeader, When } from "@/components/ui";
-import { getAppData, getCheckHistory, type MonitorView } from "@/lib/data";
+import { getAppData, getCheckHistory, getDailyUptime, getScoreHistory, type MonitorView } from "@/lib/data";
+import { UptimeBars, UptimeLegend } from "@/components/uptime-bars";
+import { dayBars, recentDays } from "@/lib/uptime-history";
+import { ScoreTrend } from "@/components/score-trend";
 import {
+  APP_TIMEZONE,
   certificateInfo,
   displayUrl,
   linkScanInfo,
@@ -25,7 +29,7 @@ import {
   timeAgo,
 } from "@/lib/format";
 import { failingSince } from "@/lib/health";
-import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS, SEVERITY_LABELS, formatInterval } from "@/lib/labels";
+import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS, SEVERITY_LABELS, countsTowardUptime, formatInterval } from "@/lib/labels";
 import { TRACKING_TAGS, TRACKING_TAG_KEYS } from "@/lib/monitoring/tracking";
 import { compareVersions } from "@/lib/monitoring/wordpress";
 import { getSettings } from "@/lib/settings-store";
@@ -91,11 +95,15 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
     { label: "Last 7 days", passed: uptime?.passed_7d ?? 0, checks: uptime?.checks_7d ?? 0 },
     { label: "Last 30 days", passed: uptime?.passed_30d ?? 0, checks: uptime?.checks_30d ?? 0 },
   ];
-  const [history, data, rules] = await Promise.all([
+  const showsUptime = countsTowardUptime(monitor.monitor_type);
+  const [history, data, rules, scoreHistory, daily] = await Promise.all([
     getCheckHistory(monitor.id, HISTORY_LIMIT),
     getAppData(),
     getSettings(),
+    monitor.monitor_type === "page_speed" ? getScoreHistory(monitor.id) : Promise.resolve([]),
+    showsUptime ? getDailyUptime([monitor.id]) : Promise.resolve(new Map()),
   ]);
+  const uptimeBars = dayBars(recentDays(new Date(), 90, APP_TIMEZONE), daily.get(monitor.id) ?? []);
   const since = failingSince(history);
 
   let disabledReason: string | undefined;
@@ -183,9 +191,24 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
       )}
 
       <div className="grid grid-cols-[2fr_1fr] items-start gap-6">
-        <Panel title="Recent checks" aside={`Latest ${Math.min(history.length, HISTORY_LIMIT)}`}>
-          <CheckHistoryTable checks={history} monitorType={monitor.monitor_type} />
-        </Panel>
+        <div className="space-y-6">
+          {showsUptime && (
+            <Panel title="Uptime history" aside="Last 90 days">
+              <div className="space-y-3 px-4 py-4">
+                <UptimeBars bars={uptimeBars} />
+                <UptimeLegend />
+              </div>
+            </Panel>
+          )}
+          {isSpeed && (
+            <Panel title="Score trend" aside="Last 90 days · mobile">
+              <ScoreTrend points={scoreHistory} minScore={rules.minPerformanceScore} />
+            </Panel>
+          )}
+          <Panel title="Recent checks" aside={`Latest ${Math.min(history.length, HISTORY_LIMIT)}`}>
+            <CheckHistoryTable checks={history} monitorType={monitor.monitor_type} />
+          </Panel>
+        </div>
 
         <div className="space-y-6">
           {isForm ? (

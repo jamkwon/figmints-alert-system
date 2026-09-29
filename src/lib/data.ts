@@ -12,7 +12,9 @@ import {
 } from "@/lib/health";
 import { requireStaff } from "@/lib/auth/session";
 import { countsTowardUptime } from "@/lib/labels";
+import { APP_TIMEZONE } from "@/lib/format";
 import type { ReportInput, ReportMonth } from "@/lib/report";
+import { countByDay, type DayCount } from "@/lib/uptime-history";
 import { buildSampleData } from "@/lib/sample-data";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
 import type {
@@ -351,6 +353,14 @@ export async function getIncidentEvents(incidentId: string): Promise<IncidentEve
 export async function getReportInput(clientId: string, month: ReportMonth): Promise<{ client: Client; input: ReportInput } | null> {
   await requireStaff();
   await connection();
+  return loadReportInput(clientId, month);
+}
+
+/**
+ * The report data without the staff check, for the scheduled monthly posting
+ * (already authenticated by CRON_SECRET). Pages must use getReportInput.
+ */
+export async function loadReportInput(clientId: string, month: ReportMonth): Promise<{ client: Client; input: ReportInput } | null> {
   const start = month.start.toISOString();
   const end = month.end.toISOString();
   const inMonth = (iso: string) => iso >= start && iso < end;
@@ -388,6 +398,9 @@ export async function getReportInput(clientId: string, month: ReportMonth): Prom
           .sort((a, b) => a.checked_at.localeCompare(b.checked_at))
           .map((c) => ({ monitorId: c.monitor_id, checkedAt: c.checked_at, status: c.status, passed: c.passed, errorMessage: c.error_message, metadata: c.metadata })),
         incidents: snapshot.incidents.filter((i) => i.client_id === clientId && openInMonth(i)).map(toIncident),
+        daily: availability.flatMap((m) =>
+          countByDay(checks.filter((c) => c.monitor_id === m.id), APP_TIMEZONE).map((d) => ({ monitorId: m.id, ...d })),
+        ),
       },
     };
   }
@@ -419,7 +432,7 @@ export async function getReportInput(clientId: string, month: ReportMonth): Prom
     if (error) throw new Error(`Failed to count checks: ${error.message}`);
     return n ?? 0;
   };
-  const [uptime, checks, incidents] = await Promise.all([
+  const [uptime, checks, incidents, daily] = await Promise.all([
     Promise.all(availability.map(async (m) => ({ monitorId: m.id, checks: await count(m.id, false), passed: await count(m.id, true) }))),
     others.length
       ? db
@@ -437,6 +450,7 @@ export async function getReportInput(clientId: string, month: ReportMonth): Prom
       .eq("client_id", clientId)
       .lt("first_detected_at", end)
       .or(`resolved_at.is.null,resolved_at.gte.${start}`),
+    dailyCounts(availability.map((m) => m.id), month.start),
   ]);
   if (checks.error) throw new Error(`Failed to load checks: ${checks.error.message}`);
   if (incidents.error) throw new Error(`Failed to load incidents: ${incidents.error.message}`);
@@ -457,6 +471,79 @@ export async function getReportInput(clientId: string, month: ReportMonth): Prom
         metadata: c.metadata,
       })),
       incidents: (incidents.data as Incident[]).map(toIncident),
+      daily: [...daily].flatMap(([monitorId, days]) =>
+        days.filter((d) => d.day.startsWith(month.key)).map((d) => ({ monitorId, ...d })),
+      ),
     },
   };
+}
+
+// Trends --------------------------------------------------------------------------
+
+export interface ScorePoint {
+  checkedAt: string;
+  score: number;
+  lcpMs: number | null;
+}
+
+/** A page speed monitor's scores over the last `days` days, oldest first. */
+export async function getScoreHistory(monitorId: string, days = 90): Promise<ScorePoint[]> {
+  await requireStaff();
+  await connection();
+  const since = new Date(Date.now() - days * 86_400_000).toISOString();
+  const toPoint = (checkedAt: string, meta: Record<string, unknown> | null): ScorePoint[] => {
+    const score = meta?.score;
+    const lab = meta?.lab as { lcpMs?: unknown } | undefined;
+    return typeof score === "number" ? [{ checkedAt, score, lcpMs: typeof lab?.lcpMs === "number" ? lab.lcpMs : null }] : [];
+  };
+  if (!isSupabaseConfigured()) {
+    return loadSampleData()
+      .checkResults.filter((c) => c.monitor_id === monitorId && c.checked_at >= since)
+      .sort((a, b) => a.checked_at.localeCompare(b.checked_at))
+      .flatMap((c) => toPoint(c.checked_at, c.metadata));
+  }
+  const { data, error } = await getSupabase()
+    .from("check_results")
+    .select("checked_at, metadata")
+    .eq("monitor_id", monitorId)
+    .gte("checked_at", since)
+    .order("checked_at", { ascending: true })
+    .limit(500);
+  if (error) throw new Error(`Failed to load score history: ${error.message}`);
+  return (data as { checked_at: string; metadata: Record<string, unknown> | null }[]).flatMap((c) => toPoint(c.checked_at, c.metadata));
+}
+
+/** Checks and passes per monitor per local day since `since`, counted in the database. */
+async function dailyCounts(monitorIds: string[], since: Date): Promise<Map<string, DayCount[]>> {
+  const result = new Map<string, DayCount[]>();
+  if (monitorIds.length === 0) return result;
+  if (!isSupabaseConfigured()) {
+    const from = since.toISOString();
+    const checks = loadSampleData().checkResults.filter((c) => monitorIds.includes(c.monitor_id) && c.checked_at >= from);
+    for (const id of monitorIds) result.set(id, countByDay(checks.filter((c) => c.monitor_id === id), APP_TIMEZONE));
+    return result;
+  }
+  const { data, error } = await getSupabase().rpc("daily_uptime", {
+    monitor_ids: monitorIds,
+    since: since.toISOString(),
+    tz: APP_TIMEZONE,
+  });
+  // Before the migration runs, history just shows empty.
+  if (error) {
+    console.warn("[uptime history] unavailable:", error.message);
+    return result;
+  }
+  for (const row of data as { monitor_id: string; day: string; checks: number | string; passed: number | string }[]) {
+    const list = result.get(row.monitor_id) ?? [];
+    list.push({ day: String(row.day).slice(0, 10), checks: Number(row.checks), passed: Number(row.passed) });
+    result.set(row.monitor_id, list);
+  }
+  return result;
+}
+
+/** Per-day counts for the uptime history bars (last `days` days). */
+export async function getDailyUptime(monitorIds: string[], days = 90): Promise<Map<string, DayCount[]>> {
+  await requireStaff();
+  await connection();
+  return dailyCounts(monitorIds, new Date(Date.now() - (days + 1) * 86_400_000));
 }
