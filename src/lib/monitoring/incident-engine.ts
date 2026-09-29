@@ -47,6 +47,10 @@ export function titleForCheck(check: Check, monitorName: string, monitorType?: M
       : `Search engines blocked on ${monitorName}`;
   }
   if (monitorType === "page_speed") return `Page speed below target on ${monitorName}`;
+  if (monitorType === "contact_form") {
+    if (/email/i.test(check.error_message ?? "")) return `Site email failing (${monitorName})`;
+    if (check.status === "failed" && check.http_status !== null && check.http_status < 400) return `Contact form problem on ${monitorName}`;
+  }
   if (monitorType === "domain_expiry") {
     return check.status === "warning" ? `Domain for ${monitorName} expires soon` : `Domain problem on ${monitorName}`;
   }

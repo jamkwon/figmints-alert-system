@@ -15,6 +15,7 @@ import {
   domainExpiryInfo,
   pageSpeedInfo,
   formatSeconds,
+  contactFormInfo,
   wordpressInfo,
 } from "@/lib/format";
 import { compareVersions } from "@/lib/monitoring/wordpress";
@@ -34,6 +35,17 @@ function LastResult({ view }: { view: MonitorView }) {
           "Open to search engines"
         )}
         {vis.foreignCanonical && <div className="mt-0.5 text-amber-700">Canonical on another domain</div>}
+      </div>
+    );
+  }
+  const form = view.monitor.monitor_type === "contact_form" ? contactFormInfo(s.last_metadata) : null;
+  if (form) {
+    const names = [...form.forms.map((f) => f.builder), ...form.embeds.map((e) => e.builder)];
+    return (
+      <div className="text-xs text-slate-600">
+        {names.length > 0 ? `${[...new Set(names)].join(", ")} form${names.length === 1 ? "" : "s"}` : "No form found"}
+        {form.mail && <> · email {form.mail.failures.length > 0 || form.mail.test.ok === false ? "failing" : "OK"}</>}
+        {s.last_error_message && <div className="mt-0.5 text-red-700">{s.last_error_message}</div>}
       </div>
     );
   }

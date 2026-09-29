@@ -19,10 +19,11 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 - **Phase 8: tracking tag checks done.** A *Tracking Tags* monitor makes sure GTM, GA4, Google Ads, Meta Pixel, LinkedIn Insight and HubSpot tags stay on a page. See **Tracking tags**.
 - **Phase 7 (WordPress / WP Engine), Stage A: done.** A *WordPress Health* monitor checks WordPress and PHP versions, visible plugins, and WP Engine install status and backups. See **WordPress health**. Evaluation: `docs/phase-7-wordpress-evaluation.md`.
 - **Phase 7: import from WP Engine done.** **Clients → Import from WP Engine** adds production sites from WP Engine as clients, with uptime, SSL and WordPress checks. See **Importing sites from WP Engine**.
-- **Phase 7, Stage B (WordPress plugin): done.** An optional read-only plugin lets WordPress Health checks see every plugin and theme with its available update (premium included), exact WordPress/PHP versions, debug mode, WP-Cron and **fatal PHP errors**. See **WordPress plugin**.
+- **Phase 7, Stage B (WordPress plugin): done.** An optional plugin (it never changes the site) lets WordPress Health checks see every plugin and theme with its available update (premium included), exact WordPress/PHP versions, debug mode, WP-Cron, **fatal PHP errors** and **failed emails**. See **WordPress plugin**.
 - **Search visibility and domain expiry: done.** A *Search Visibility* monitor fails if a production site tells search engines not to index it or robots.txt blocks it; a *Domain Expiry* monitor warns before the domain registration runs out. See **Search visibility** and **Domain expiry**.
 - **Page speed: done.** A *Page Speed* monitor runs Google PageSpeed Insights (mobile) daily and warns when the performance score drops below a minimum or real visitors' Core Web Vitals fail. See **Page speed**.
 - **Monthly client report: done.** A printable report per client and month (uptime, incidents, WordPress work done, page speed, security). See **Monthly report**.
+- **Contact form checks: done.** A *Contact Form* monitor fails when a page's form is missing or broken (any form tool), or when the site's emails fail to send (WordPress plugin 1.3+). See **Contact forms**.
 
 Running checks and updating incidents require Supabase. On sample data those controls are disabled.
 
@@ -61,6 +62,7 @@ Copy `.env.example` to `.env.local`:
 | `APP_URL` | No | Public app address for "Open incident" links in alerts. On Vercel the production domain is detected automatically. |
 | `WPENGINE_API_USER` / `WPENGINE_API_PASSWORD` | For WP Engine data | API credentials from my.wpengine.com → API Access. **Secret.** Used read-only (installs and backups). |
 | `WEBSITE_WATCH_PLUGIN_KEY` | For the WordPress plugin | Private key (64 hex characters) that signs requests to the site plugin. **Secret.** Changing it means re-installing the plugin. `WEBSITE_WATCH_PLUGIN_TOKEN` (its earlier name) also works. |
+| `WEBSITE_WATCH_TEST_EMAIL` | No | Address the WordPress plugin sends one test email a day to (e.g. `websitewatch@figmints.com`), to prove sites can send email. Built into the plugin at download. |
 | `PAGESPEED_API_KEY` | For Page Speed monitors | Google API key for PageSpeed Insights. See **Page speed**. Without it, those checks only say it's missing. |
 | `APP_TIMEZONE` | No | Timezone for displayed times. Default `America/New_York`. |
 
@@ -105,6 +107,7 @@ The schema lives in `supabase/migrations/`. Sample data lives in `supabase/seed.
    - `20261003000000_seo_domain.sql` (Search Visibility and Domain Expiry monitors)
    - `20261004000000_page_speed.sql` (Page Speed monitors; minimum score setting)
    - `20261005000000_weekly_monthly_intervals.sql` (Weekly and Monthly check intervals)
+   - `20261006000000_contact_form.sql` (Contact Form monitors)
 3. (Optional) Run `supabase/seed.sql` to load the 6 sample clients. You can re-run it safely; it replaces the earlier sample rows.
 4. Copy the project URL and the secret key into `.env.local`, then restart `npm run dev`.
 
@@ -177,6 +180,7 @@ src/
       visibility.ts     noindex, robots.txt (Google's rules) and canonical checks
       domain.ts         Domain expiry from the registry's RDAP service
       pagespeed.ts      Google PageSpeed Insights: score, lab and real-user metrics, rules
+      forms.ts          Contact forms on a page (any builder) and the site's email health
     report.ts           Monthly client report: months, uptime, incidents, WordPress work done
       url-safety.ts     SSRF protection
       incident-engine.ts Pure rules: when to open, update or resolve an incident
@@ -204,6 +208,7 @@ Each check makes one `GET` request to the monitor's target URL and stores the re
 | Tracking Tags | The page loads and every expected tag is in its HTML | Failed, naming the missing tags (uses the monitor's severity; default Warning) |
 | Search Visibility | The page doesn't say noindex, robots.txt doesn't block it, and its canonical URL is on the same domain | Failed when search engines are kept out (monitor severity, Critical by default); Warning for a robots.txt error or a canonical on another domain |
 | Domain Expiry | The domain registration has more than 30 days left | Warning at 30 days or less; Failed at 7 days or less, expired, or in its redemption period |
+| Contact Form | A usable form is on the page (any form tool), and, with the plugin, the site's emails send | Failed when the form is missing or broken, or emails failed in the last 24 hours / the daily test email failed (monitor severity, Critical by default) |
 | Page Speed | Google PageSpeed performance score (mobile) at or above the minimum in Settings (default 50), and real visitors' Core Web Vitals passing | Warning only (never Failed: a slow page isn't an outage) |
 | Broken Links | The page loads and none of its first 40 links/images/stylesheets/scripts are broken | Warning when any are broken; Failed only if the page itself doesn't load |
 | SSL Certificate | The certificate is trusted, matches the domain, and has more than 14 days left | Warning at 14 days or less; Failed at 3 days or less, or when expired, untrusted or for the wrong domain (both day limits in **Settings**) |
@@ -273,7 +278,7 @@ The backup limit, the minimum PHP version (or not checking PHP) and whether avai
 
 #### WordPress plugin
 
-**Website Watch Health** is a small **read-only WordPress plugin**. With it, a WordPress Health check also knows:
+**Website Watch Health** is a small **WordPress plugin** that reports on the site without changing it. With it, a WordPress Health check also knows:
 
 - **every plugin and theme**, active or not, with the update WordPress offers, **including premium plugins** that use WordPress's update system with a valid license (Gravity Forms, ACF Pro, Events Calendar Pro…);
 - the exact WordPress and PHP versions and PHP memory limit;
@@ -286,7 +291,7 @@ Extra warnings when it's installed: theme updates, debug errors shown to visitor
 
 **How it stays safe**
 
-- **Read-only for everything but its own notes.** It only reads what WordPress's own update checks already stored. It never updates, installs or changes anything, never calls out, and takes no input besides two request headers. It writes only its own two notes: a short-lived record of each signature it accepted (to refuse replays), and the fatal PHP error log (one non-autoloaded option, throttled).
+- **Never changes the site.** It only reads what WordPress's own update checks already stored. It never updates, installs or changes content or settings, never calls out to other services, and takes no input besides two request headers. It writes only its own notes: a short-lived record of each signature it accepted (to refuse replays), the fatal PHP error log, and the email log (failures and last send; non-autoloaded options, throttled). The only thing it sends is the optional daily test email, to the fixed address built into it (1.3+).
 - **Signed requests.** Website Watch signs every request with an **Ed25519 private key** that never leaves Website Watch. The plugin holds only the matching **public key**, so the plugin file contains no secret: copying it gives an attacker nothing.
 - **Each signature is tied to one site, one moment, one use.** It covers the site's own domain (taken from WordPress's settings, not the request), and a timestamp the plugin accepts for 5 minutes, and the plugin accepts it only once. A captured request, or one sent to the wrong server (a redirect, an expired domain), is useless on any other site, later, or a second time. Website Watch also never follows redirects with these requests.
 - **One narrow endpoint:** `POST /wp-json/website-watch/v1/status`. Everything else gets `401`, GET isn't answered, and responses carry `no-store` so no page cache (including WP Engine's) keeps a report. The endpoint isn't listed in the site's public `/wp-json/` index, and opening the plugin file directly shows nothing.
@@ -357,6 +362,24 @@ A **Domain Expiry** monitor watches when the site's domain registration runs out
 - The **weekly summary** lists domains expiring within **60 days**, earlier than the warning.
 - A few endings (e.g. `.io`) have no RDAP service: the check then says so as a Warning, and can be deleted.
 - **Adding one:** tick **Also watch the domain's registration expiry** on **Add client** or **Add monitors**. Checked daily.
+
+### Contact forms
+
+A **Contact Form** monitor watches a page with a form (use the contact page's URL; add it as a *Contact Form* monitor from **Add monitors → One monitor**). It **never submits the form**, so there are no fake leads, emails or CRM entries.
+
+**1. The form is there and usable** (any site). It finds real forms with fields and a submit button and recognizes **Gravity Forms, Contact Form 7, WPForms, Formidable, Elementor**, plain HTML forms, and forms drawn by scripts (**HubSpot**, **Ninja Forms**). Site search forms are ignored. **Failed** when:
+- there's no form on the page, or it has no submit button;
+- the form tool says the form can't be found (e.g. Gravity Forms' "We could not locate your form", Contact Form 7's 404);
+- a form **shortcode shows as text**, e.g. `[gravityform id="6"]` (its plugin was deactivated);
+- a HubSpot form's script doesn't load;
+- **HubSpot says the form doesn't exist (deleted) or isn't published.** For HubSpot forms (both the classic `hbspt.forms.create` embed and the newer `hs-form-frame` one), the check asks HubSpot for the form's public definition, the same one the embed loads (`forms.hsforms.com/embed/v3/form/{portal}/{form}/json`, or `forms-eu1…` for EU accounts). If HubSpot itself doesn't answer, that's only noted, not failed.
+
+**2. The site can send email** (WordPress sites with the Website Watch plugin, 1.3+). Almost every WordPress form tool sends notifications through WordPress's mailer, so the plugin records every email that **fails to send** (the reason only, e.g. "SMTP Error: Could not authenticate."; addresses are masked and no content is kept) and when an email last went out. **Failed** when an email failed in the last 24 hours. This catches the most common real breakage: expired email/SMTP settings, where entries are saved but nobody is notified.
+
+- **Daily test email (optional):** set `WEBSITE_WATCH_TEST_EMAIL` (e.g. `websitewatch@figmints.com`), download the plugin again and re-install it. Each site then sends one short test email a day to that address (via WP-Cron) and reports whether it worked, so broken email is caught even on days nobody fills in the form. **Failed** if it fails; **Warning** if it hasn't run for 2 days (WP-Cron not running).
+- **HubSpot forms** are submitted to HubSpot and emailed by HubSpot, so part 2 doesn't apply to them; part 1 covers the form being on the page and live in HubSpot. Who receives HubSpot's notifications, and whether submissions keep arriving, would need the HubSpot API.
+
+The weekly summary lists contact form and email problems, and the monthly report says whether the form and email worked all month.
 
 ### Page speed
 

@@ -15,7 +15,7 @@ import { APP_TIMEZONE } from "@/lib/format";
 import { allowedDomains } from "@/lib/auth/session";
 import { MAX_LINKS } from "@/lib/monitoring/links";
 import { checkWpeConnection } from "@/lib/monitoring/wpengine";
-import { WP_PLUGIN_VERSION, WP_PLUGIN_ZIP, pluginKey } from "@/lib/monitoring/wp-plugin";
+import { WP_PLUGIN_VERSION, WP_PLUGIN_ZIP, pluginKey, pluginTestEmail } from "@/lib/monitoring/wp-plugin";
 import { RETENTION_DAYS } from "@/lib/monitoring/scheduler";
 import { appUrl, slackWebhookUrl } from "@/lib/notify/send";
 import { supabaseEnvStatus } from "@/lib/supabase/server";
@@ -71,6 +71,7 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
   const slackConfigured = slackWebhookUrl() !== null;
   const lastSummary = await getLastWeeklySummary();
   const pluginKeySet = pluginKey() !== null;
+  const testEmail = pluginTestEmail();
   const wpe = source === "sample" ? { ok: false, message: "Not configured" } : await checkWpeConnection();
   const alertLinkBase = appUrl();
 
@@ -267,8 +268,20 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
             )}
           </Row>
           <Row label="What it adds">
-            A read-only plugin for each site. WordPress Health checks then see every plugin and theme with its
+            A plugin for each site that reports without changing anything. Checks then see every plugin and theme with its
             available update (premium included), exact WordPress and PHP versions, debug mode and WP-Cron.
+          </Row>
+          <Row label="Daily test email">
+            {testEmail ? (
+              <>
+                {testEmail}{" "}
+                <span className="text-xs text-slate-500">
+                  (built into the plugin when downloaded; re-install after changing it)
+                </span>
+              </>
+            ) : (
+              <span className="text-slate-500">Off. Set WEBSITE_WATCH_TEST_EMAIL to have sites send one test email a day.</span>
+            )}
           </Row>
           {pluginKeySet && (
             <Row label="Download">

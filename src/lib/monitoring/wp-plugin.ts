@@ -12,7 +12,7 @@ import { createPrivateKey, createPublicKey, sign, type KeyObject } from "node:cr
 import { firstSetEnv } from "../supabase/config.ts";
 import { zipFiles } from "./zip.ts";
 
-export const WP_PLUGIN_VERSION = "1.2.0";
+export const WP_PLUGIN_VERSION = "1.3.0";
 /** Folder and main file name inside the zip, and the plugin's slug. */
 export const WP_PLUGIN_SLUG = "website-watch-health";
 export const WP_PLUGIN_ZIP = `${WP_PLUGIN_SLUG}.zip`;
@@ -60,16 +60,27 @@ export function signRequest(key: KeyObject, host: string, now = Date.now()): Rec
   };
 }
 
+/** Only plain addresses: this goes into a PHP string. */
+const TEST_EMAIL = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+
+/** Where plugins send a daily test email, from WEBSITE_WATCH_TEST_EMAIL; null turns it off. */
+export function pluginTestEmail(): string | null {
+  const email = firstSetEnv(["WEBSITE_WATCH_TEST_EMAIL"])?.value?.trim();
+  return email && TEST_EMAIL.test(email) ? email : null;
+}
+
 /** The zip WordPress's "Upload Plugin" screen expects: website-watch-health/website-watch-health.php. */
-export function pluginZip(publicKey: string, date = new Date()): Buffer {
-  const file = { name: `${WP_PLUGIN_SLUG}/${WP_PLUGIN_SLUG}.php`, data: Buffer.from(pluginSource(publicKey)) };
+export function pluginZip(publicKey: string, testEmail: string | null = null, date = new Date()): Buffer {
+  const file = { name: `${WP_PLUGIN_SLUG}/${WP_PLUGIN_SLUG}.php`, data: Buffer.from(pluginSource(publicKey, testEmail)) };
   return zipFiles([file], date);
 }
 
-/** The plugin file, with the public key filled in. */
-export function pluginSource(publicKey: string): string {
+/** The plugin file, with the public key (and the daily test email's address, if any) filled in. */
+export function pluginSource(publicKey: string, testEmail: string | null = null): string {
   if (!/^[A-Za-z0-9+/]{43}=$/.test(publicKey)) throw new Error("Invalid public key");
+  if (testEmail !== null && !TEST_EMAIL.test(testEmail)) throw new Error("Invalid test email address");
   return PLUGIN_TEMPLATE.replace("__PUBLIC_KEY__", publicKey)
+    .replace("__TEST_EMAIL__", testEmail ?? "")
     .replaceAll("__VERSION__", WP_PLUGIN_VERSION)
     .replaceAll("__MAX_AGE__", String(SIGNATURE_MAX_AGE_SECONDS));
 }
@@ -77,7 +88,7 @@ export function pluginSource(publicKey: string): string {
 const PLUGIN_TEMPLATE = `<?php
 /**
  * Plugin Name: Website Watch Health
- * Description: Read-only health report for Figmints Website Watch: WordPress, PHP, plugin and theme versions and their available updates. It changes nothing on the site.
+ * Description: Health report for Figmints Website Watch: WordPress, PHP, plugin and theme versions and updates, PHP errors, and whether the site can send email. It never changes your content or settings.
  * Version: __VERSION__
  * Author: Figmints
  * Requires at least: 5.8
@@ -96,8 +107,9 @@ const PLUGIN_TEMPLATE = `<?php
  *   private key that signs requests never leaves Website Watch.
  * - Reads only what WordPress's own update checks already stored. It never
  *   updates, installs or changes anything, never calls out, and takes no input
- *   besides the signature headers. The one thing it records is fatal PHP errors
- *   (last 7 days, first line of the message, paths relative to the site).
+ *   besides the signature headers. It records fatal PHP errors and failed
+ *   emails (last 7 days, reasons only), and sends a daily test email when
+ *   WEBSITE_WATCH_TEST_EMAIL is set.
  */
 
 if (!defined('ABSPATH')) {
@@ -217,6 +229,8 @@ if (!defined('WEBSITE_WATCH_HEALTH_VERSION')) {
 
 	register_deactivation_hook(__FILE__, function () {
 		delete_option(WEBSITE_WATCH_FATAL_OPTION);
+		delete_option(WEBSITE_WATCH_MAIL_OPTION);
+		wp_clear_scheduled_hook('website_watch_health_test_email');
 	});
 
 	/** Paths relative to the site ("wp-content/plugins/x/y.php"), so server paths aren't stored. */
@@ -296,6 +310,138 @@ if (!defined('WEBSITE_WATCH_HEALTH_VERSION')) {
 		} catch (Throwable $e) {
 			// Never make a failing request worse.
 		}
+	}
+
+	// Email ---------------------------------------------------------------------------
+	// Form notifications go through wp_mail whichever form plugin sends them, so
+	// record emails that fail (last 7 days, the reason only: no addresses or
+	// content), when one last went out, and the daily test email's result when
+	// WEBSITE_WATCH_TEST_EMAIL is set. One non-autoloaded option.
+	define('WEBSITE_WATCH_MAIL_OPTION', 'website_watch_health_mail');
+	define('WEBSITE_WATCH_TEST_EMAIL', '__TEST_EMAIL__');
+
+	/** Reads, changes and saves the email log; $change returns null to skip the write. */
+	function website_watch_health_update_mail($change) {
+		try {
+			$log = get_option(WEBSITE_WATCH_MAIL_OPTION, array());
+			if (!is_array($log)) {
+				$log = array();
+			}
+			$next = $change($log, time());
+			if (is_array($next)) {
+				update_option(WEBSITE_WATCH_MAIL_OPTION, $next, false);
+			}
+		} catch (Throwable $e) {
+			// Never break sending email.
+		}
+	}
+
+	/** The reason only: first line, addresses masked, at most 300 characters. */
+	function website_watch_health_mail_reason($message) {
+		$lines = preg_split('/\\r\\n|\\r|\\n/', (string) $message);
+		$reason = trim((string) preg_replace('/[[:alnum:]._%+-]+@[[:alnum:].-]+/', '[address]', (string) $lines[0]));
+		$reason = function_exists('mb_substr') ? mb_substr($reason, 0, 300) : substr($reason, 0, 300);
+		return $reason === '' ? 'Unknown error' : $reason;
+	}
+
+	add_action('wp_mail_failed', function ($error) {
+		$reason = website_watch_health_mail_reason(is_wp_error($error) ? $error->get_error_message() : '');
+		website_watch_health_update_mail(function ($log, $now) use ($reason) {
+			// At most one write every 10 seconds, so a burst of failures can't flood the database.
+			if (isset($log['failure_written']) && $now - (int) $log['failure_written'] < 10) {
+				return null;
+			}
+			$failures = isset($log['failures']) && is_array($log['failures']) ? $log['failures'] : array();
+			foreach ($failures as $key => $failure) {
+				if (!is_array($failure) || !isset($failure['last']) || $now - (int) $failure['last'] > 7 * DAY_IN_SECONDS) {
+					unset($failures[$key]);
+				}
+			}
+			$key = md5($reason);
+			if (isset($failures[$key])) {
+				$failures[$key]['count'] = (int) $failures[$key]['count'] + 1;
+				$failures[$key]['last'] = $now;
+			} else {
+				$failures[$key] = array('first' => $now, 'last' => $now, 'count' => 1, 'message' => $reason);
+			}
+			uasort($failures, function ($a, $b) {
+				return (int) $b['last'] - (int) $a['last'];
+			});
+			$log['failures'] = array_slice($failures, 0, 20, true);
+			$log['failure_written'] = $now;
+			return $log;
+		});
+	});
+
+	// WordPress 5.9+ says when an email went out.
+	add_action('wp_mail_succeeded', function () {
+		website_watch_health_update_mail(function ($log, $now) {
+			// This runs for every email the site sends: write at most every 10 minutes.
+			if (isset($log['last_sent']) && $now - (int) $log['last_sent'] < 600) {
+				return null;
+			}
+			$log['last_sent'] = $now;
+			return $log;
+		});
+	});
+
+	// A daily test email proves email works even on days nobody submits a form.
+	add_action('init', function () {
+		if (is_email(WEBSITE_WATCH_TEST_EMAIL) && !wp_next_scheduled('website_watch_health_test_email')) {
+			wp_schedule_event(time() + 300, 'daily', 'website_watch_health_test_email');
+		}
+	});
+	add_action('website_watch_health_test_email', 'website_watch_health_send_test_email');
+
+	function website_watch_health_send_test_email() {
+		if (!is_email(WEBSITE_WATCH_TEST_EMAIL)) {
+			return;
+		}
+		$error = null;
+		$capture = function ($e) use (&$error) {
+			$error = website_watch_health_mail_reason(is_wp_error($e) ? $e->get_error_message() : '');
+		};
+		add_action('wp_mail_failed', $capture);
+		$site = (string) wp_parse_url(home_url(), PHP_URL_HOST);
+		$sent = wp_mail(
+			WEBSITE_WATCH_TEST_EMAIL,
+			'Website Watch test email: ' . $site,
+			'This automated email checks that ' . home_url('/') . ' can send email, such as form notifications. The Website Watch Health plugin sends it once a day; no action is needed.'
+		);
+		remove_action('wp_mail_failed', $capture);
+		website_watch_health_update_mail(function ($log, $now) use ($sent, $error) {
+			$log['test'] = array('at' => $now, 'ok' => (bool) $sent, 'error' => $sent ? null : ($error ? $error : 'wp_mail returned false'));
+			return $log;
+		});
+	}
+
+	function website_watch_health_mail_report() {
+		$log = get_option(WEBSITE_WATCH_MAIL_OPTION, array());
+		if (!is_array($log)) {
+			$log = array();
+		}
+		$failures = array();
+		foreach (isset($log['failures']) && is_array($log['failures']) ? $log['failures'] : array() as $failure) {
+			if (!is_array($failure)) {
+				continue;
+			}
+			$failures[] = array(
+				'last_at' => website_watch_health_time(isset($failure['last']) ? $failure['last'] : 0),
+				'count'   => isset($failure['count']) ? (int) $failure['count'] : 1,
+				'message' => isset($failure['message']) ? (string) $failure['message'] : '',
+			);
+		}
+		$test = isset($log['test']) && is_array($log['test']) ? $log['test'] : array();
+		return array(
+			'failures'     => $failures,
+			'last_sent_at' => website_watch_health_time(isset($log['last_sent']) ? $log['last_sent'] : 0),
+			'test'         => array(
+				'configured' => (bool) is_email(WEBSITE_WATCH_TEST_EMAIL),
+				'last_at'    => website_watch_health_time(isset($test['at']) ? $test['at'] : 0),
+				'ok'         => isset($test['ok']) ? (bool) $test['ok'] : null,
+				'error'      => isset($test['error']) ? (string) $test['error'] : null,
+			),
+		);
 	}
 
 	function website_watch_health_fatal_errors() {
@@ -398,6 +544,7 @@ if (!defined('WEBSITE_WATCH_HEALTH_VERSION')) {
 			'fatal_errors'       => website_watch_health_fatal_errors(),
 			// When WordPress last emailed the admin about a fatal error (at most daily).
 			'recovery_email_at'  => website_watch_health_time((int) get_option('recovery_mode_email_last_sent', 0)),
+			'mail'               => website_watch_health_mail_report(),
 		);
 	}
 }

@@ -270,3 +270,31 @@ export function pageSpeedInfo(metadata: Record<string, unknown> | null | undefin
 export function formatSeconds(ms: number | null | undefined): string {
   return typeof ms === "number" ? `${(ms / 1000).toFixed(1)} s` : "–";
 }
+
+export interface ContactFormInfo {
+  forms: { builder: string; id: string | null; fields: number; hasSubmit: boolean }[];
+  embeds: { builder: string; id: string | null; scriptUrl: string | null }[];
+  hubspot: { id: string; status: "ok" | "missing" | "unpublished" | "unknown"; fields: number | null }[];
+  errors: string[];
+  captcha: boolean;
+  mail: {
+    failures: { lastAt: string | null; count: number; message: string }[];
+    lastSentAt: string | null;
+    test: { configured: boolean; lastAt: string | null; ok: boolean | null; error: string | null };
+  } | null;
+  pluginNote: string | null;
+}
+
+/** Results of a contact form check from its latest check metadata. */
+export function contactFormInfo(metadata: Record<string, unknown> | null | undefined): ContactFormInfo | null {
+  if (!metadata || !Array.isArray(metadata.forms)) return null;
+  return {
+    forms: metadata.forms as ContactFormInfo["forms"],
+    embeds: Array.isArray(metadata.embeds) ? (metadata.embeds as ContactFormInfo["embeds"]) : [],
+    hubspot: Array.isArray(metadata.hubspot_forms) ? (metadata.hubspot_forms as ContactFormInfo["hubspot"]) : [],
+    errors: Array.isArray(metadata.form_errors) ? (metadata.form_errors as string[]) : [],
+    captcha: metadata.captcha === true,
+    mail: (metadata.mail as ContactFormInfo["mail"]) ?? null,
+    pluginNote: typeof metadata.plugin_note === "string" ? metadata.plugin_note : null,
+  };
+}

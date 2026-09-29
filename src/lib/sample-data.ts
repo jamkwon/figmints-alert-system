@@ -406,6 +406,33 @@ export function buildSampleData(now: Date = new Date()): {
     };
   }
 
+  // Contact form: the form is fine, but the site's email broke (expired SMTP login).
+  monitor(23, 3, "Contact Form", "contact_form", "https://bluefinchbakery.example/contact",
+    { interval: 360, severity: "critical", passingLatestMin: 800,
+      failures: fails("failed", 200, "2 emails from the site failed to send in the last 24 hours (SMTP Error: Could not authenticate.)", [[70, 640], [430, 610]]) });
+  for (const check of checkResults) {
+    if (check.monitor_id !== mid(23)) continue;
+    check.metadata = {
+      final_url: "https://bluefinchbakery.example/contact",
+      forms: [{ builder: "Gravity Forms", id: "3", fields: 5, hasSubmit: true }],
+      embeds: [],
+      form_errors: [],
+      captcha: true,
+      embed_script_ok: null,
+      mail: {
+        failures: check.passed ? [] : [{ lastAt: check.checked_at, count: 2, message: "SMTP Error: Could not authenticate." }],
+        lastSentAt: new Date(now.getTime() - 26 * 3_600_000).toISOString(),
+        test: {
+          configured: true,
+          lastAt: new Date(now.getTime() - 5 * 3_600_000).toISOString(),
+          ok: check.passed,
+          error: check.passed ? null : "SMTP Error: Could not authenticate.",
+        },
+      },
+      plugin_note: "Reported by the Website Watch plugin",
+    };
+  }
+
   const summaries = monitors.map((m) => summarizeChecks(m.id, checkResults));
 
   function incident(

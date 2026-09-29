@@ -35,6 +35,7 @@ import { isWpeConfigured, listBackups, listInstalls } from "./wpengine.ts";
 import { RDAP_BOOTSTRAP_URL, daysLeft, domainCandidates, evaluateDomain, parseRdap, rdapBaseFor } from "./domain.ts";
 import { evaluateVisibility, findNoindex, foreignCanonical, robotsBlocks } from "./visibility.ts";
 import { PAGESPEED_API, PAGESPEED_STRATEGY, evaluatePageSpeed, parsePageSpeed } from "./pagespeed.ts";
+import { detectForms, evaluateForms, hubspotDefinitionUrl, hubspotFormStatus } from "./forms.ts";
 import { firstSetEnv } from "../supabase/config.ts";
 import { WP_PLUGIN_ROUTE, pluginKey, signRequest } from "./wp-plugin.ts";
 
@@ -53,7 +54,8 @@ const agent = new Agent({
 
 // The WordPress plugin's report can't be cached (it's a signed POST), so it
 // always pays WordPress's full start-up time, which is slow on some sites
-// (13 s+ on some WP Engine staging installs). Give it more room.
+// (13 s+ on some WP Engine staging installs). Give it more room; contact form
+// pages, often left uncached, get the same.
 const PLUGIN_TIMEOUT_MS = 20_000;
 const pluginAgent = new Agent({
   connect: { lookup: safeLookup, timeout: 10_000 },
@@ -521,6 +523,22 @@ async function fetchOptionalText(url: string): Promise<string | null> {
   }
 }
 
+// Checks of the same site in one run (WordPress Health, Contact Form) share one
+// report: signatures cover the site and the second, and the plugin accepts each
+// only once, so two requests in the same second would have the second refused.
+const REPORT_SHARE_MS = 60_000;
+const sharedReports = new Map<string, { at: number; result: Promise<{ report: PluginReport | null; note: string }> }>();
+
+function pluginReportFor(origin: string, key: KeyObject): Promise<{ report: PluginReport | null; note: string }> {
+  const now = Date.now();
+  for (const [o, entry] of sharedReports) if (now - entry.at > REPORT_SHARE_MS) sharedReports.delete(o);
+  const hit = sharedReports.get(origin);
+  if (hit) return hit.result;
+  const result = fetchPluginReport(origin, key);
+  sharedReports.set(origin, { at: now, result });
+  return result;
+}
+
 /**
  * Asks the Website Watch Health plugin on this origin for its report. The
  * request is signed for this host only, and redirects aren't followed.
@@ -619,7 +637,7 @@ export async function performWordPressCheck(monitor: Monitor, settings: AppSetti
     fetchOptionalText(`${origin}/feed/`),
     fetchOptionalText(`${origin}/wp-json/`),
     latestCoreVersion(),
-    signingKey ? fetchPluginReport(origin, signingKey) : null,
+    signingKey ? pluginReportFor(origin, signingKey) : null,
     lookupWpEngine(),
   ]);
   const { install, backups, error: wpengineError } = wpe;
@@ -936,6 +954,100 @@ export async function performPageSpeedCheck(monitor: Monitor, settings: AppSetti
   return { outcome: evaluatePageSpeed(result, settings.minPerformanceScore, performance.now() - started), metadata };
 }
 
+// Contact form ---------------------------------------------------------------------------
+
+/**
+ * Is there a usable form on the page (any builder), and, with the Website Watch
+ * plugin, does the site's email work? Never submits anything.
+ */
+export async function performContactFormCheck(monitor: Monitor): Promise<HttpCheckResult> {
+  const started = performance.now();
+  const metadata: CheckMetadata = {};
+  const pageFailed = (partial: Partial<HttpObservation>): HttpCheckResult => ({
+    outcome: evaluateCheck(monitor, {
+      httpStatus: null,
+      statusText: "",
+      responseTimeMs: performance.now() - started,
+      body: null,
+      error: null,
+      ...partial,
+    }),
+    metadata,
+  });
+  // Ask the site plugin while the page loads: both can be slow on uncached pages
+  // (form pages often are), and one after the other could outlast a scheduler run.
+  const signingKey = pluginKey();
+  const targetOrigin = new URL(monitor.target_url).origin;
+  const earlyPlugin = signingKey ? pluginReportFor(targetOrigin, signingKey) : null;
+  let page: { response: Response; url: URL };
+  let html: string;
+  try {
+    page = await safeFetch(validateTargetUrl(monitor.target_url), {
+      signal: AbortSignal.timeout(PLUGIN_TIMEOUT_MS),
+      dispatcher: pluginAgent,
+    });
+    html = (await readBody(page.response)).text;
+  } catch (err) {
+    return pageFailed({ error: describeFetchError(err, PLUGIN_TIMEOUT_MS) });
+  }
+  const elapsed = performance.now() - started;
+  if (!isExpectedStatus(page.response.status, null)) {
+    return pageFailed({ httpStatus: page.response.status, statusText: page.response.statusText, responseTimeMs: elapsed });
+  }
+  const findings = detectForms(html);
+  const scriptUrl = findings.embeds.find((e) => e.scriptUrl)?.scriptUrl ?? null;
+  const hubspotChecks = findings.embeds.flatMap((e) => {
+    const url = hubspotDefinitionUrl(e);
+    return url && e.id ? [{ id: e.id, url }] : [];
+  }).slice(0, 3);
+  const [embedScriptOk, plugin, hubspot] = await Promise.all([
+    scriptUrl
+      ? safeFetch(validateTargetUrl(scriptUrl), { signal: AbortSignal.timeout(TIMEOUT_MS), accept: "*/*" })
+          .then(async ({ response }) => {
+            await response.body?.cancel();
+            return response.ok;
+          })
+          .catch(() => false)
+      : null,
+    // The plugin signs for one host: if the page redirected elsewhere (e.g. to www.), ask there.
+    signingKey && page.url.origin !== targetOrigin ? pluginReportFor(page.url.origin, signingKey) : earlyPlugin,
+    Promise.all(
+      hubspotChecks.map(async ({ id, url }) => {
+        try {
+          const { response } = await safeFetch(validateTargetUrl(url), { signal: AbortSignal.timeout(TIMEOUT_MS), accept: "application/json" });
+          if (response.status !== 200) {
+            await response.body?.cancel();
+            return hubspotFormStatus(id, response.status, null);
+          }
+          return hubspotFormStatus(id, 200, JSON.parse((await readBody(response)).text));
+        } catch {
+          return hubspotFormStatus(id, null, null);
+        }
+      }),
+    ),
+  ]);
+  const mail = plugin?.report?.mail ?? null;
+  Object.assign(metadata, {
+    final_url: page.url.toString(),
+    forms: findings.forms,
+    embeds: findings.embeds,
+    form_errors: findings.errors,
+    captcha: findings.captcha,
+    embed_script_ok: embedScriptOk,
+    hubspot_forms: hubspot,
+    mail,
+    plugin_note: plugin
+      ? plugin.report && !plugin.report.mail
+        ? "Update the Website Watch plugin to 1.3 to check the site's email"
+        : plugin.note
+      : null,
+  });
+  return {
+    outcome: evaluateForms({ findings, embedScriptOk, hubspot, mail, now: new Date() }, elapsed, page.response.status),
+    metadata,
+  };
+}
+
 /** Runs the right kind of check for the monitor, with the rules from Settings. */
 export function performCheck(monitor: Monitor, settings: AppSettings = DEFAULT_SETTINGS): Promise<HttpCheckResult> {
   // Monitors without their own response time limit use the Settings default.
@@ -947,5 +1059,6 @@ export function performCheck(monitor: Monitor, settings: AppSettings = DEFAULT_S
   if (m.monitor_type === "search_visibility") return performVisibilityCheck(m);
   if (m.monitor_type === "domain_expiry") return performDomainCheck(m);
   if (m.monitor_type === "page_speed") return performPageSpeedCheck(m, settings);
+  if (m.monitor_type === "contact_form") return performContactFormCheck(m);
   return performHttpCheck(m);
 }

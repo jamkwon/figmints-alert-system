@@ -148,3 +148,12 @@ test("page speed warnings get their own incident title", () => {
   const warning = { ...fail("t", "Performance score 38/100 on mobile (below 50)", null), status: "warning" as const };
   assert.equal(titleForCheck(warning, "Page Speed (Homepage)", "page_speed"), "Page speed below target on Page Speed (Homepage)");
 });
+
+test("contact form problems get their own incident titles", () => {
+  assert.equal(
+    titleForCheck(fail("t", "2 emails from the site failed to send in the last 24 hours (SMTP Error)", 200), "Contact Form", "contact_form"),
+    "Site email failing (Contact Form)",
+  );
+  assert.equal(titleForCheck(fail("t", "No contact form found on the page", 200), "Contact Form", "contact_form"), "Contact form problem on Contact Form");
+  assert.equal(titleForCheck(fail("t", "HTTP 404 Not Found", 404), "Contact Form", "contact_form"), "Contact Form returning HTTP 404", "page errors keep the usual title");
+});

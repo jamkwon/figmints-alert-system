@@ -11,7 +11,8 @@ export type MonitorType =
   | "wordpress_health"
   | "search_visibility"
   | "domain_expiry"
-  | "page_speed";
+  | "page_speed"
+  | "contact_form";
 export type CheckStatus = "passed" | "failed" | "warning";
 export type Severity = "critical" | "warning" | "informational";
 export type IncidentStatus =

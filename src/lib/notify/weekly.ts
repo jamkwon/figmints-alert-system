@@ -179,6 +179,7 @@ export function buildWeeklySummary({ monitors, incidents, now, appUrl }: Summary
   const linkLines: string[] = [];
   const visibilityLines: string[] = [];
   const speedLines: string[] = [];
+  const formLines: string[] = [];
   const domainLines: { line: string; days: number }[] = [];
   const tagLines: string[] = [];
 
@@ -226,6 +227,10 @@ export function buildWeeklySummary({ monitors, incidents, now, appUrl }: Summary
         const when = cert.daysLeft < 0 ? "*expired*" : `expires ${formatDate(cert.validTo)} (${plural(cert.daysLeft, "day")})`;
         sslLines.push({ line: `${site(m)}: ${when}`, days: cert.daysLeft });
       }
+    } else if (m.monitorType === "contact_form") {
+      if (m.lastStatus && m.lastStatus !== "passed" && m.lastErrorMessage) {
+        formLines.push(`${m.lastStatus === "failed" ? ":red_circle: " : ""}${site(m)}: ${esc(m.lastErrorMessage)}`);
+      }
     } else if (m.monitorType === "page_speed") {
       if (m.lastStatus === "warning" && m.lastErrorMessage) speedLines.push(`${site(m)}: ${esc(m.lastErrorMessage)}`);
     } else if (m.monitorType === "search_visibility") {
@@ -252,6 +257,7 @@ export function buildWeeklySummary({ monitors, incidents, now, appUrl }: Summary
 
   const sections = [
     section(":rotating_light: *Needs attention now*", incidentLines),
+    section(":envelope: *Contact forms and email*", formLines),
     section(":mag: *Search visibility*", visibilityLines),
     section(
       `:globe_with_meridians: *Domains expiring within ${SUMMARY_DOMAIN_DAYS} days*`,
