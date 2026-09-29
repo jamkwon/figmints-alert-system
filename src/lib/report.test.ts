@@ -174,3 +174,20 @@ test("plugin updates are counted from the first check with the site plugin's ful
   assert.equal(wp.pendingUpdates, 0);
   assert.equal(wp.fullDetail, true);
 });
+
+test("uptime by website has one bar per day of the month", () => {
+  const r = buildMonthlyReport({
+    ...input,
+    daily: [
+      { monitorId: "home", day: "2026-09-12", checks: 288, passed: 279 },
+      { monitorId: "home", day: "2026-09-13", checks: 288, passed: 288 },
+      { monitorId: "speed", day: "2026-09-13", checks: 1, passed: 0 }, // not availability: ignored
+    ],
+  });
+  const main = r.websites.find((w) => w.name === "Main site")!;
+  assert.equal(main.days.length, 30, "September");
+  assert.equal(main.days[0].day, "2026-09-01");
+  assert.equal(main.days[11].uptime!.toFixed(2), "96.88");
+  assert.deepEqual([main.days[12].checks, main.days[12].passed], [288, 288]);
+  assert.equal(main.days[0].uptime, null, "no checks that day");
+});

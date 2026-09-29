@@ -2,6 +2,7 @@
 // backups, PHP errors, SSL and domain dates, search visibility, for one client
 // and one calendar month (APP_TIMEZONE). Pure: data loading lives in data.ts.
 import { countsTowardUptime } from "./labels.ts";
+import { dayBars, daysBetween, type DayBar } from "./uptime-history.ts";
 import { compareVersions } from "./monitoring/wordpress.ts";
 import type { CheckStatus, Environment, MonitorType, Severity } from "./types.ts";
 
@@ -114,6 +115,8 @@ export interface ReportInput {
   checks: ReportCheck[];
   /** Incidents open at any point in the month. */
   incidents: ReportIncident[];
+  /** Per-day check counts in the month, for availability monitors. */
+  daily?: { monitorId: string; day: string; checks: number; passed: number }[];
 }
 
 // Output ------------------------------------------------------------------------------
@@ -146,7 +149,7 @@ export interface MonthlyReport {
     /** Mean time from detection to resolution, for incidents resolved in the month. */
     meanMinutesToResolve: number | null;
   };
-  websites: { name: string; url: string; environment: Environment; uptime: number | null; checks: number }[];
+  websites: { name: string; url: string; environment: Environment; uptime: number | null; checks: number; days: DayBar[] }[];
   incidents: { title: string; severity: Severity; openedAt: string; resolvedAt: string | null; minutes: number | null }[];
   pageSpeed: { website: string; url: string; latest: number | null; min: number; max: number; average: number; tests: number; latestLcpMs: number | null }[];
   wordpress: WordPressWork[];
@@ -268,8 +271,15 @@ export function buildMonthlyReport(input: ReportInput): MonthlyReport {
   });
   const total = availability.reduce((n, u) => n + u.checks, 0);
   const passed = availability.reduce((n, u) => n + u.passed, 0);
+  const [year, monthNumber] = month.key.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+  const monthDays = daysBetween(`${month.key}-01`, `${month.key}-${String(lastDay).padStart(2, "0")}`);
   const siteRows = websites.map((w) => {
     const rows = availability.filter((u) => monitorById.get(u.monitorId)?.websiteId === w.id);
+    const siteDaily = (input.daily ?? []).filter((d) => {
+      const m = monitorById.get(d.monitorId);
+      return m?.websiteId === w.id && countsTowardUptime(m.type);
+    });
     const checksRun = rows.reduce((n, u) => n + u.checks, 0);
     return {
       name: w.name,
@@ -277,6 +287,7 @@ export function buildMonthlyReport(input: ReportInput): MonthlyReport {
       environment: w.environment,
       uptime: percent(rows.reduce((n, u) => n + u.passed, 0), checksRun),
       checks: checksRun,
+      days: dayBars(monthDays, siteDaily),
     };
   });
 
