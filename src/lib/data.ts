@@ -12,6 +12,7 @@ import {
 } from "@/lib/health";
 import { requireStaff } from "@/lib/auth/session";
 import { countsTowardUptime } from "@/lib/labels";
+import type { ReportInput, ReportMonth } from "@/lib/report";
 import { buildSampleData } from "@/lib/sample-data";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
 import type {
@@ -338,4 +339,124 @@ export async function getIncidentEvents(incidentId: string): Promise<IncidentEve
     .limit(100);
   if (error) throw new Error(`Failed to load incident history: ${error.message}`);
   return data as IncidentEvent[];
+}
+
+// Monthly report ----------------------------------------------------------------------
+
+/**
+ * Everything the monthly report needs for one client and month, or null for an
+ * unknown client. Availability monitors are counted in the database (they check
+ * every few minutes); other checks are few enough to load.
+ */
+export async function getReportInput(clientId: string, month: ReportMonth): Promise<{ client: Client; input: ReportInput } | null> {
+  await requireStaff();
+  await connection();
+  const start = month.start.toISOString();
+  const end = month.end.toISOString();
+  const inMonth = (iso: string) => iso >= start && iso < end;
+  const toMonitor = (m: Monitor) => ({ id: m.id, websiteId: m.website_id, name: m.name, type: m.monitor_type });
+  const toWebsite = (w: Website) => ({ id: w.id, name: w.name, url: w.url, environment: w.environment });
+  const toIncident = (i: Incident) => ({
+    title: i.title,
+    severity: i.severity,
+    firstDetectedAt: i.first_detected_at,
+    resolvedAt: i.resolved_at,
+  });
+  const openInMonth = (i: Incident) => i.first_detected_at < end && (!i.resolved_at || i.resolved_at >= start);
+
+  if (!isSupabaseConfigured()) {
+    const { snapshot, checkResults } = loadSampleData();
+    const client = snapshot.clients.find((c) => c.id === clientId);
+    if (!client) return null;
+    const websites = snapshot.websites.filter((w) => w.client_id === clientId);
+    const monitors = snapshot.monitors.filter((m) => websites.some((w) => w.id === m.website_id));
+    const checks = checkResults.filter((c) => monitors.some((m) => m.id === c.monitor_id) && inMonth(c.checked_at));
+    const availability = monitors.filter((m) => countsTowardUptime(m.monitor_type));
+    return {
+      client,
+      input: {
+        month,
+        now: new Date(),
+        websites: websites.map(toWebsite),
+        monitors: monitors.map(toMonitor),
+        uptime: availability.map((m) => {
+          const own = checks.filter((c) => c.monitor_id === m.id);
+          return { monitorId: m.id, checks: own.length, passed: own.filter((c) => c.passed).length };
+        }),
+        checks: checks
+          .filter((c) => !availability.some((m) => m.id === c.monitor_id))
+          .sort((a, b) => a.checked_at.localeCompare(b.checked_at))
+          .map((c) => ({ monitorId: c.monitor_id, checkedAt: c.checked_at, status: c.status, passed: c.passed, errorMessage: c.error_message, metadata: c.metadata })),
+        incidents: snapshot.incidents.filter((i) => i.client_id === clientId && openInMonth(i)).map(toIncident),
+      },
+    };
+  }
+
+  const db = getSupabase();
+  const client = await db.from("clients").select("*").eq("id", clientId).maybeSingle();
+  if (client.error) throw new Error(`Failed to load client: ${client.error.message}`);
+  if (!client.data) return null;
+  const websites = await db.from("websites").select("*").eq("client_id", clientId).order("name");
+  if (websites.error) throw new Error(`Failed to load websites: ${websites.error.message}`);
+  const websiteIds = (websites.data as Website[]).map((w) => w.id);
+  const monitors = websiteIds.length
+    ? await db.from("monitors").select("*").in("website_id", websiteIds)
+    : { data: [] as Monitor[], error: null };
+  if (monitors.error) throw new Error(`Failed to load monitors: ${monitors.error.message}`);
+  const all = monitors.data as Monitor[];
+  const availability = all.filter((m) => countsTowardUptime(m.monitor_type));
+  const others = all.filter((m) => !countsTowardUptime(m.monitor_type));
+
+  const count = async (monitorId: string, passedOnly: boolean) => {
+    let q = db
+      .from("check_results")
+      .select("id", { count: "exact", head: true })
+      .eq("monitor_id", monitorId)
+      .gte("checked_at", start)
+      .lt("checked_at", end);
+    if (passedOnly) q = q.eq("passed", true);
+    const { count: n, error } = await q;
+    if (error) throw new Error(`Failed to count checks: ${error.message}`);
+    return n ?? 0;
+  };
+  const [uptime, checks, incidents] = await Promise.all([
+    Promise.all(availability.map(async (m) => ({ monitorId: m.id, checks: await count(m.id, false), passed: await count(m.id, true) }))),
+    others.length
+      ? db
+          .from("check_results")
+          .select("monitor_id, checked_at, status, passed, error_message, metadata")
+          .in("monitor_id", others.map((m) => m.id))
+          .gte("checked_at", start)
+          .lt("checked_at", end)
+          .order("checked_at", { ascending: true })
+          .limit(5000)
+      : Promise.resolve({ data: [], error: null }),
+    db
+      .from("incidents")
+      .select("*")
+      .eq("client_id", clientId)
+      .lt("first_detected_at", end)
+      .or(`resolved_at.is.null,resolved_at.gte.${start}`),
+  ]);
+  if (checks.error) throw new Error(`Failed to load checks: ${checks.error.message}`);
+  if (incidents.error) throw new Error(`Failed to load incidents: ${incidents.error.message}`);
+  return {
+    client: client.data as Client,
+    input: {
+      month,
+      now: new Date(),
+      websites: (websites.data as Website[]).map(toWebsite),
+      monitors: all.map(toMonitor),
+      uptime,
+      checks: (checks.data as CheckResult[]).map((c) => ({
+        monitorId: c.monitor_id,
+        checkedAt: c.checked_at,
+        status: c.status,
+        passed: c.passed,
+        errorMessage: c.error_message,
+        metadata: c.metadata,
+      })),
+      incidents: (incidents.data as Incident[]).map(toIncident),
+    },
+  };
 }
