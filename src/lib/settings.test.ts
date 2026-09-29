@@ -15,6 +15,7 @@ function form(values: Record<string, string>) {
     backup_max_age_hours: "48",
     min_php_version: "8.2",
     warn_on_updates: "on",
+    min_performance_score: "50",
     summary_enabled: "on",
     summary_weekday: "1",
     summary_hour: "9",

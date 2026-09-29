@@ -143,3 +143,8 @@ test("search visibility and domain expiry get their own incident titles", () => 
   assert.equal(titleForCheck(warning, "Domain Expiry", "domain_expiry"), "Domain for Domain Expiry expires soon");
   assert.equal(titleForCheck(fail("t", "Domain figmints.com expired 2 days ago", null), "Domain Expiry", "domain_expiry"), "Domain problem on Domain Expiry");
 });
+
+test("page speed warnings get their own incident title", () => {
+  const warning = { ...fail("t", "Performance score 38/100 on mobile (below 50)", null), status: "warning" as const };
+  assert.equal(titleForCheck(warning, "Page Speed (Homepage)", "page_speed"), "Page speed below target on Page Speed (Homepage)");
+});

@@ -19,6 +19,8 @@ export interface AppSettings {
   minPhpVersion: string | null;
   /** WordPress Health: available core, plugin and theme updates count as a Warning. */
   warnOnUpdates: boolean;
+  /** Page Speed: Warning below this Lighthouse performance score (0 turns it off). */
+  minPerformanceScore: number;
   summaryEnabled: boolean;
   /** 1 = Monday … 7 = Sunday. */
   summaryWeekday: number;
@@ -35,6 +37,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   backupMaxAgeHours: 48,
   minPhpVersion: "8.2",
   warnOnUpdates: true,
+  minPerformanceScore: 50,
   summaryEnabled: true,
   summaryWeekday: 1,
   summaryHour: 9,
@@ -52,6 +55,7 @@ export const SETTING_LIMITS: Record<NumberKey, { min: number; max: number }> = {
   sslWarningDays: { min: 1, max: 90 },
   sslFailureDays: { min: 0, max: 60 },
   backupMaxAgeHours: { min: 12, max: 720 },
+  minPerformanceScore: { min: 0, max: 100 },
   summaryWeekday: { min: 1, max: 7 },
   summaryHour: { min: 0, max: 23 },
 };
@@ -68,6 +72,7 @@ export const SETTING_FIELDS: Record<keyof AppSettings, string> = {
   backupMaxAgeHours: "backup_max_age_hours",
   minPhpVersion: "min_php_version",
   warnOnUpdates: "warn_on_updates",
+  minPerformanceScore: "min_performance_score",
   summaryEnabled: "summary_enabled",
   summaryWeekday: "summary_weekday",
   summaryHour: "summary_hour",
@@ -117,6 +122,7 @@ const LABELS: Record<NumberKey, string> = {
   sslWarningDays: "SSL warning",
   sslFailureDays: "SSL failure",
   backupMaxAgeHours: "Backup age",
+  minPerformanceScore: "Minimum performance score",
   summaryWeekday: "Summary day",
   summaryHour: "Summary time",
 };

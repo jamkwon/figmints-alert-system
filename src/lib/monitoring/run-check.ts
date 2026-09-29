@@ -34,6 +34,8 @@ import {
 import { isWpeConfigured, listBackups, listInstalls } from "./wpengine.ts";
 import { RDAP_BOOTSTRAP_URL, daysLeft, domainCandidates, evaluateDomain, parseRdap, rdapBaseFor } from "./domain.ts";
 import { evaluateVisibility, findNoindex, foreignCanonical, robotsBlocks } from "./visibility.ts";
+import { PAGESPEED_API, PAGESPEED_STRATEGY, evaluatePageSpeed, parsePageSpeed } from "./pagespeed.ts";
+import { firstSetEnv } from "../supabase/config.ts";
 import { WP_PLUGIN_ROUTE, pluginKey, signRequest } from "./wp-plugin.ts";
 
 const TIMEOUT_MS = 15_000;
@@ -862,6 +864,78 @@ export async function performDomainCheck(monitor: Monitor): Promise<HttpCheckRes
   return warn(`The registry doesn't know ${candidates.join(" or ")}`);
 }
 
+// Page speed ---------------------------------------------------------------------------
+
+/** Lighthouse runs take 10–40 s; the scheduler starts these first so a run still ends within 60 s. */
+export const PAGESPEED_TIMEOUT_MS = 45_000;
+
+function pagespeedKey(): string | null {
+  return firstSetEnv(["PAGESPEED_API_KEY"])?.value?.trim() || null;
+}
+
+export function isPageSpeedConfigured(): boolean {
+  return pagespeedKey() !== null;
+}
+
+/** Google PageSpeed Insights for the page (mobile): Lighthouse score, lab and real-user metrics. */
+export async function performPageSpeedCheck(monitor: Monitor, settings: AppSettings = DEFAULT_SETTINGS): Promise<HttpCheckResult> {
+  const started = performance.now();
+  const metadata: CheckMetadata = {};
+  const warn = (message: string): HttpCheckResult => ({
+    outcome: {
+      http_status: null,
+      response_time_ms: Math.round(performance.now() - started),
+      status: "warning",
+      passed: false,
+      error_message: message,
+    },
+    metadata,
+  });
+  const key = pagespeedKey();
+  if (!key) return warn("PAGESPEED_API_KEY isn't set (see README → Page speed)");
+  let target: URL;
+  try {
+    target = validateTargetUrl(monitor.target_url);
+  } catch (err) {
+    return warn(err instanceof Error ? err.message : "Not a valid URL");
+  }
+  const query = new URLSearchParams({ url: target.toString(), strategy: PAGESPEED_STRATEGY, category: "performance", key });
+  let res: Awaited<ReturnType<typeof fetch>>;
+  try {
+    // A fixed Google host; the key stays out of any message or stored result.
+    res = await fetch(`${PAGESPEED_API}?${query}`, {
+      signal: AbortSignal.timeout(PAGESPEED_TIMEOUT_MS),
+      headers: { accept: "application/json" },
+    });
+  } catch (err) {
+    return warn(`PageSpeed didn't answer: ${describeFetchError(err, PAGESPEED_TIMEOUT_MS)}`);
+  }
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    return warn(`PageSpeed answered HTTP ${res.status} with no readable result`);
+  }
+  if (!res.ok) {
+    const error = (body as { error?: { message?: unknown } })?.error;
+    const message = typeof error?.message === "string" ? error.message.replace(/key=[^&\s]+/gi, "key=…").slice(0, 200) : "";
+    if (res.status === 429) return warn("PageSpeed's daily quota is used up; the next check will try again");
+    if (res.status === 400 || res.status === 403) return warn(`PageSpeed refused the request: ${message || `HTTP ${res.status}`}`);
+    return warn(`PageSpeed answered HTTP ${res.status}${message ? `: ${message}` : ""}`);
+  }
+  const result = parsePageSpeed(body);
+  Object.assign(metadata, {
+    final_url: result.finalUrl,
+    strategy: PAGESPEED_STRATEGY,
+    score: result.score,
+    lab: result.lab,
+    field: result.field,
+    opportunities: result.opportunities,
+    lighthouse_version: result.lighthouseVersion,
+  });
+  return { outcome: evaluatePageSpeed(result, settings.minPerformanceScore, performance.now() - started), metadata };
+}
+
 /** Runs the right kind of check for the monitor, with the rules from Settings. */
 export function performCheck(monitor: Monitor, settings: AppSettings = DEFAULT_SETTINGS): Promise<HttpCheckResult> {
   // Monitors without their own response time limit use the Settings default.
@@ -872,5 +946,6 @@ export function performCheck(monitor: Monitor, settings: AppSettings = DEFAULT_S
   if (m.monitor_type === "wordpress_health") return performWordPressCheck(m, settings);
   if (m.monitor_type === "search_visibility") return performVisibilityCheck(m);
   if (m.monitor_type === "domain_expiry") return performDomainCheck(m);
+  if (m.monitor_type === "page_speed") return performPageSpeedCheck(m, settings);
   return performHttpCheck(m);
 }

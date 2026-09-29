@@ -14,6 +14,9 @@ const CONCURRENCY = 5;
 // Stop starting new checks after this (20 s + a 35 s check still ends before
 // 60 s). Unstarted monitors are released for the next run.
 const TIME_BUDGET_MS = 20_000;
+// Page speed checks take up to 45 s, so they only start in a run's first 5 s
+// (5 s + 45 s ends before 60 s); later ones are released for the next run.
+const PAGE_SPEED_START_MS = 5_000;
 // Check results older than this are deleted (once an hour).
 export const RETENTION_DAYS = 90;
 
@@ -77,6 +80,13 @@ export async function runDueChecks(): Promise<SchedulerRunSummary> {
         deferredIds.push(...queue.map((m) => m.id));
         queue.length = 0;
         return;
+      }
+      const next = queue[0];
+      if (next.monitor_type === "page_speed" && Date.now() - started > PAGE_SPEED_START_MS) {
+        // Hand it back rather than risk the 60 s limit; the next run starts it first.
+        summary.deferred++;
+        deferredIds.push(queue.shift()!.id);
+        continue;
       }
       const monitor = queue.shift()!;
       try {

@@ -10,7 +10,8 @@ export type MonitorType =
   | "tracking_tags"
   | "wordpress_health"
   | "search_visibility"
-  | "domain_expiry";
+  | "domain_expiry"
+  | "page_speed";
 export type CheckStatus = "passed" | "failed" | "warning";
 export type Severity = "critical" | "warning" | "informational";
 export type IncidentStatus =
