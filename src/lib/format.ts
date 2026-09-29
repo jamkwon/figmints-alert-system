@@ -202,3 +202,41 @@ export function wordpressInfo(metadata: Record<string, unknown> | null | undefin
     problems: Array.isArray(metadata.problems) ? (metadata.problems as WordPressInfo["problems"]) : [],
   };
 }
+
+export interface VisibilityInfo {
+  noindex: string | null;
+  robotsStatus: number | null;
+  robotsBlocks: boolean;
+  foreignCanonical: string | null;
+}
+
+/** Results of a search visibility check from its latest check metadata. */
+export function visibilityInfo(metadata: Record<string, unknown> | null | undefined): VisibilityInfo | null {
+  if (!metadata || !("robots_blocks" in metadata)) return null;
+  return {
+    noindex: typeof metadata.noindex === "string" ? metadata.noindex : null,
+    robotsStatus: typeof metadata.robots_status === "number" ? metadata.robots_status : null,
+    robotsBlocks: metadata.robots_blocks === true,
+    foreignCanonical: typeof metadata.foreign_canonical === "string" ? metadata.foreign_canonical : null,
+  };
+}
+
+export interface DomainExpiryInfo {
+  domain: string;
+  expiresAt: string | null;
+  daysLeft: number | null;
+  registrar: string | null;
+  statuses: string[];
+}
+
+/** Results of a domain expiry check from its latest check metadata. */
+export function domainExpiryInfo(metadata: Record<string, unknown> | null | undefined): DomainExpiryInfo | null {
+  if (!metadata || typeof metadata.domain !== "string") return null;
+  return {
+    domain: metadata.domain,
+    expiresAt: typeof metadata.expires_at === "string" ? metadata.expires_at : null,
+    daysLeft: typeof metadata.days_left === "number" ? metadata.days_left : null,
+    registrar: typeof metadata.registrar === "string" ? metadata.registrar : null,
+    statuses: Array.isArray(metadata.statuses) ? (metadata.statuses as string[]) : [],
+  };
+}

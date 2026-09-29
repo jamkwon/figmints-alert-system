@@ -106,6 +106,8 @@ export function ClientForm({ client }: { client?: Client }) {
           <Checkbox name="links" label="Also scan the homepage for broken links (daily)" defaultChecked />
           <Checkbox name="tags" label="Also watch the homepage's tracking tags (expects the ones found now)" defaultChecked />
           <Checkbox name="wordpress" label="Also check WordPress health: versions, updates and WP Engine backups" defaultChecked />
+          <Checkbox name="visibility" label="Also check that search engines can index the homepage" defaultChecked />
+          <Checkbox name="domain" label="Also watch the domain's registration expiry (daily)" defaultChecked />
           <p className="text-xs text-slate-500">Leave Pages empty to add monitors later. New monitors are checked within 5 minutes.</p>
         </fieldset>
       )}
@@ -198,10 +200,15 @@ export function AddMonitorsForm({
         label="Also watch the homepage's tracking tags, expecting the ones found now (skipped if it already has one)"
       />
       <Checkbox name="wordpress" label="Also check WordPress health: versions, updates and WP Engine backups (skipped if it already has one)" />
+      <Checkbox
+        name="visibility"
+        label="Also check that search engines can index the homepage (production websites only; skipped if it already has one)"
+      />
+      <Checkbox name="domain" label="Also watch the domain's registration expiry, daily (skipped if it already has one)" />
       <p className="text-xs text-slate-500">
         {hasPages
           ? "Names come from the page path (you can rename them after). New monitors are checked within 5 minutes."
-          : "No pages listed: only the ticked extra checks are added (SSL, tags and WordPress every 6 hours, link scan daily)."}
+          : "No pages listed: only the ticked extra checks are added (SSL, tags, WordPress and search visibility every 6 hours; link scan and domain daily)."}
       </p>
       <FormActions label="Add monitors" cancelHref={`/clients/${clientId}`} />
     </form>
@@ -220,6 +227,10 @@ const TYPE_HELP: Record<MonitorType, string> = {
     "Fails when any chosen tag is missing from the page's HTML (e.g. removed by a theme or plugin update).",
   wordpress_health:
     "WordPress version, PHP, plugins with updates, PHP errors, and WP Engine backups (limits in Settings → Monitoring rules).",
+  search_visibility:
+    "Fails if the page tells search engines not to index it (noindex, e.g. WordPress's \"Discourage search engines\") or robots.txt blocks it. For production sites.",
+  domain_expiry:
+    "Checks when the domain's registration expires (from its registry): warning at 30 days left, failed at 7. Only the domain of the URL is used.",
 };
 
 const SEVERITY_HELP: Partial<Record<MonitorType, string>> = {
@@ -227,7 +238,9 @@ const SEVERITY_HELP: Partial<Record<MonitorType, string>> = {
   ssl_expiry: "Expiring soon is always a Warning; this applies when the certificate fails.",
   broken_links: "Broken links are always a Warning; this applies if the page itself fails to load.",
   tracking_tags: "Choose Critical to get a Slack alert when a tag goes missing.",
-  wordpress_health: "Applies to backup problems. Available updates are always a Warning.",
+  wordpress_health: "Applies to backups and PHP errors. Available updates are a Warning (or nothing, per Settings).",
+  search_visibility: "Applies when search engines are blocked. A robots.txt error or a canonical on another domain is a Warning.",
+  domain_expiry: "Applies at 7 days left or when expired. 30 days left is a Warning.",
 };
 
 const INTERVAL_HINT: Partial<Record<MonitorType, string>> = {
@@ -235,7 +248,19 @@ const INTERVAL_HINT: Partial<Record<MonitorType, string>> = {
   broken_links: "Daily keeps scans polite (each scan makes up to 40 requests).",
   tracking_tags: "Every 6 hours catches a removed tag the same day.",
   wordpress_health: "Every 6 hours catches a failed nightly backup the same day.",
+  search_visibility: "Every 6 hours catches a noindex pushed from staging the same day.",
+  domain_expiry: "Daily is plenty: expiry dates change slowly.",
 };
+
+/** Types with their own pass/fail rules, where the page settings (expected status, text, time) don't apply. */
+const OWN_RULES: MonitorType[] = [
+  "ssl_expiry",
+  "broken_links",
+  "tracking_tags",
+  "wordpress_health",
+  "search_visibility",
+  "domain_expiry",
+];
 
 /** Defaults for a brand-new monitor. */
 const NEW_MONITOR = {
@@ -276,8 +301,7 @@ export function MonitorForm({
     "website_id",
   ];
   // SSL and link scans have their own pass/fail rules, so page settings don't apply.
-  const pageCheck =
-    type !== "ssl_expiry" && type !== "broken_links" && type !== "tracking_tags" && type !== "wordpress_health";
+  const pageCheck = !OWN_RULES.includes(type);
   // Hidden fields stay in the form (so values survive switching type); the server ignores them.
   const show = (visible: boolean) => (visible ? undefined : "hidden");
   return (

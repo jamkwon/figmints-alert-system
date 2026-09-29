@@ -2,7 +2,7 @@
 // work across all sites (open incidents, backups, PHP errors, certificates,
 // WordPress updates, broken links, missing tags). Pure (relative imports only) so it can
 // be tested directly. Scheduling and sending live in weekly-send.ts.
-import { certificateInfo, formatDate, linkScanInfo, trackingInfo, wordpressInfo } from "../format.ts";
+import { certificateInfo, domainExpiryInfo, formatDate, linkScanInfo, trackingInfo, wordpressInfo } from "../format.ts";
 import { countsTowardUptime } from "../labels.ts";
 import { TRACKING_TAGS, isTrackingTag } from "../monitoring/tracking.ts";
 import { compareVersions } from "../monitoring/wordpress.ts";
@@ -12,6 +12,8 @@ import type { CheckStatus, Environment, MonitorType, Severity } from "../types.t
 export const SUMMARY_CATCH_UP_HOURS = 24;
 /** Certificates expiring within this many days are listed. */
 export const SUMMARY_SSL_DAYS = 30;
+/** Domains expiring within this many days are listed (earlier notice than the 30-day warning). */
+export const SUMMARY_DOMAIN_DAYS = 60;
 /** Lines per section before "…and N more". */
 const MAX_LINES = 15;
 /** Slack's limit for a section's text is 3000 characters. */
@@ -117,7 +119,14 @@ function section(title: string, lines: string[]): unknown | null {
 }
 
 /** Warnings from these monitors are listed in their own sections, not as incidents. */
-const OWN_SECTION: MonitorType[] = ["wordpress_health", "ssl_expiry", "broken_links", "tracking_tags"];
+const OWN_SECTION: MonitorType[] = [
+  "wordpress_health",
+  "ssl_expiry",
+  "broken_links",
+  "tracking_tags",
+  "search_visibility",
+  "domain_expiry",
+];
 
 /** "Akismet Anti-spam: Spam Protection" → "Akismet Anti-spam". */
 function shortName(name: string): string {
@@ -167,6 +176,8 @@ export function buildWeeklySummary({ monitors, incidents, now, appUrl }: Summary
   const wordpressLines: { line: string; weight: number }[] = [];
   const sslLines: { line: string; days: number }[] = [];
   const linkLines: string[] = [];
+  const visibilityLines: string[] = [];
+  const domainLines: { line: string; days: number }[] = [];
   const tagLines: string[] = [];
 
   for (const m of monitors) {
@@ -213,6 +224,16 @@ export function buildWeeklySummary({ monitors, incidents, now, appUrl }: Summary
         const when = cert.daysLeft < 0 ? "*expired*" : `expires ${formatDate(cert.validTo)} (${plural(cert.daysLeft, "day")})`;
         sslLines.push({ line: `${site(m)}: ${when}`, days: cert.daysLeft });
       }
+    } else if (m.monitorType === "search_visibility") {
+      if (m.lastStatus && m.lastStatus !== "passed" && m.lastErrorMessage) {
+        visibilityLines.push(`${m.lastStatus === "failed" ? ":red_circle: " : ""}${site(m)}: ${esc(m.lastErrorMessage)}`);
+      }
+    } else if (m.monitorType === "domain_expiry") {
+      const dom = domainExpiryInfo(m.metadata);
+      if (dom?.expiresAt && dom.daysLeft !== null && dom.daysLeft <= SUMMARY_DOMAIN_DAYS) {
+        const when = dom.daysLeft < 0 ? "*expired*" : `expires ${formatDate(dom.expiresAt)} (${plural(dom.daysLeft, "day")})`;
+        domainLines.push({ line: `${site(m)}: ${esc(dom.domain)} ${when}`, days: dom.daysLeft });
+      }
     } else if (m.monitorType === "broken_links") {
       const scan = linkScanInfo(m.metadata);
       if (scan && scan.broken.length > 0) linkLines.push(`${site(m)}: ${plural(scan.broken.length, "broken link")}`);
@@ -227,6 +248,11 @@ export function buildWeeklySummary({ monitors, incidents, now, appUrl }: Summary
 
   const sections = [
     section(":rotating_light: *Needs attention now*", incidentLines),
+    section(":mag: *Search visibility*", visibilityLines),
+    section(
+      `:globe_with_meridians: *Domains expiring within ${SUMMARY_DOMAIN_DAYS} days*`,
+      domainLines.sort((a, b) => a.days - b.days).map((l) => l.line),
+    ),
     section(":floppy_disk: *Backups*", backupLines),
     section(
       ":boom: *PHP errors (last 7 days)*",

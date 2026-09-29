@@ -79,8 +79,13 @@ export function CheckStatusBadge({ status, monitorType }: { status: CheckStatus;
         ? "Broken links"
         : monitorType === "wordpress_health"
           ? "Updates needed"
-          : label;
+          : monitorType === "domain_expiry"
+            ? "Expiring soon"
+            : monitorType === "search_visibility"
+              ? "Needs a look"
+              : label;
   if (status === "failed" && monitorType === "tracking_tags") return <HealthBadge health={health} label="Tags missing" />;
+  if (status === "failed" && monitorType === "search_visibility") return <HealthBadge health={health} label="Hidden from search" />;
   return <HealthBadge health={health} label={status === "warning" ? warningLabel : label} />;
 }
 
