@@ -19,7 +19,7 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 - **Phase 8: tracking tag checks done.** A *Tracking Tags* monitor makes sure GTM, GA4, Google Ads, Meta Pixel, LinkedIn Insight and HubSpot tags stay on a page. See **Tracking tags**.
 - **Phase 7 (WordPress / WP Engine), Stage A: done.** A *WordPress Health* monitor checks WordPress and PHP versions, visible plugins, and WP Engine install status and backups. See **WordPress health**. Evaluation: `docs/phase-7-wordpress-evaluation.md`.
 - **Phase 7: import from WP Engine done.** **Clients → Import from WP Engine** adds production sites from WP Engine as clients, with uptime, SSL and WordPress checks. See **Importing sites from WP Engine**.
-- **Phase 7, Stage B (WordPress plugin): done.** An optional read-only plugin lets WordPress Health checks see every plugin and theme with its available update (premium included), exact WordPress/PHP versions, debug mode and WP-Cron. See **WordPress plugin**.
+- **Phase 7, Stage B (WordPress plugin): done.** An optional read-only plugin lets WordPress Health checks see every plugin and theme with its available update (premium included), exact WordPress/PHP versions, debug mode, WP-Cron and **fatal PHP errors**. See **WordPress plugin**.
 
 Running checks and updating incidents require Supabase. On sample data those controls are disabled.
 
@@ -260,19 +260,22 @@ A **WordPress Health** monitor combines three sources:
 
 - **every plugin and theme**, active or not, with the update WordPress offers, **including premium plugins** that use WordPress's update system with a valid license (Gravity Forms, ACF Pro, Events Calendar Pro…);
 - the exact WordPress and PHP versions and PHP memory limit;
-- whether **debug errors are shown to visitors**, and whether **WP-Cron** is running.
+- whether **debug errors are shown to visitors**, and whether **WP-Cron** is running;
+- **fatal PHP errors** (plugin 1.2+): the crashes that show visitors WordPress's "There has been a critical error" page, with the plugin or theme at fault.
+
+**PHP errors:** WordPress keeps no log of fatal errors (it only emails the admin, at most daily), so the plugin records them as they happen: the last 7 days, up to 20 distinct errors, each with how many times it happened (approximate: at most one write every 10 seconds, so an error flood can't flood the database). Only the first line of the message is kept (no stack traces), with server paths shortened to `wp-content/…`. Any fatal error in the last **24 hours** makes the check **fail** (Critical by default, so Slack hears about it), named after the plugin or theme at fault; older ones stay listed on the monitor page and in the weekly summary. Errors from before the plugin was installed (or updated to 1.2) can't be seen. Deactivating the plugin deletes its error log.
 
 Extra warnings when it's installed: theme updates, debug errors shown to visitors, WP-Cron more than 2 hours behind, and WordPress not having checked for updates in 3 days (its update list would be stale). Plugin updates count toward the existing "plugins with updates available" warning.
 
 **How it stays safe**
 
-- **Read-only.** It only reads what WordPress's own update checks already stored. It never updates, installs or changes anything, never calls out, and takes no input besides two request headers. (The one thing it writes is a short-lived note of each signature it has accepted, so it can refuse a replay.)
+- **Read-only for everything but its own notes.** It only reads what WordPress's own update checks already stored. It never updates, installs or changes anything, never calls out, and takes no input besides two request headers. It writes only its own two notes: a short-lived record of each signature it accepted (to refuse replays), and the fatal PHP error log (one non-autoloaded option, throttled).
 - **Signed requests.** Website Watch signs every request with an **Ed25519 private key** that never leaves Website Watch. The plugin holds only the matching **public key**, so the plugin file contains no secret: copying it gives an attacker nothing.
 - **Each signature is tied to one site, one moment, one use.** It covers the site's own domain (taken from WordPress's settings, not the request), and a timestamp the plugin accepts for 5 minutes, and the plugin accepts it only once. A captured request, or one sent to the wrong server (a redirect, an expired domain), is useless on any other site, later, or a second time. Website Watch also never follows redirects with these requests.
 - **One narrow endpoint:** `POST /wp-json/website-watch/v1/status`. Everything else gets `401`, GET isn't answered, and responses carry `no-store` so no page cache (including WP Engine's) keeps a report. The endpoint isn't listed in the site's public `/wp-json/` index, and opening the plugin file directly shows nothing.
 - **Never replaced by a stranger's plugin.** It declares `Update URI: false`, so WordPress never offers a wordpress.org plugin with the same folder name as an "update" for it.
 - **Can't break a site by being installed twice.** Two copies (e.g. in different folders) load only once, instead of a PHP "cannot redeclare" crash.
-- **Tested** on WordPress 7.1 / PHP 8.3 and WordPress 6.8 / PHP 7.4 against: no or garbage signature, wrong key, tampered signature or timestamp, signatures for another site, 10 minutes old or in the future, replay, oversized headers, GET, and two copies installed. All refused, or handled, as expected.
+- **Tested** on WordPress 7.1 / PHP 8.3 and WordPress 6.8 / PHP 7.4 (fatal errors before output, after output and uncaught exceptions are all recorded) against: no or garbage signature, wrong key, tampered signature or timestamp, signatures for another site, 10 minutes old or in the future, replay, oversized headers, GET, and two copies installed. All refused, or handled, as expected.
 
 **Setting it up (once)**
 
