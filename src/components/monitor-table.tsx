@@ -13,6 +13,8 @@ import {
   trackingInfo,
   visibilityInfo,
   domainExpiryInfo,
+  pageSpeedInfo,
+  formatSeconds,
   wordpressInfo,
 } from "@/lib/format";
 import { compareVersions } from "@/lib/monitoring/wordpress";
@@ -32,6 +34,15 @@ function LastResult({ view }: { view: MonitorView }) {
           "Open to search engines"
         )}
         {vis.foreignCanonical && <div className="mt-0.5 text-amber-700">Canonical on another domain</div>}
+      </div>
+    );
+  }
+  const speed = view.monitor.monitor_type === "page_speed" ? pageSpeedInfo(s.last_metadata) : null;
+  if (speed) {
+    return (
+      <div className="text-xs text-slate-600">
+        {speed.score !== null ? <>Score {speed.score}/100</> : "No score"} · LCP {formatSeconds(speed.lab.lcpMs)}
+        {s.last_error_message && <div className="mt-0.5 text-amber-700">{s.last_error_message}</div>}
       </div>
     );
   }

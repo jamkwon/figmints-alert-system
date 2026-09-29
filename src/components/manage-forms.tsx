@@ -108,6 +108,7 @@ export function ClientForm({ client }: { client?: Client }) {
           <Checkbox name="wordpress" label="Also check WordPress health: versions, updates and WP Engine backups" defaultChecked />
           <Checkbox name="visibility" label="Also check that search engines can index the homepage" defaultChecked />
           <Checkbox name="domain" label="Also watch the domain's registration expiry (daily)" defaultChecked />
+          <Checkbox name="speed" label="Also test the homepage's speed with Google PageSpeed (daily; needs PAGESPEED_API_KEY)" />
           <p className="text-xs text-slate-500">Leave Pages empty to add monitors later. New monitors are checked within 5 minutes.</p>
         </fieldset>
       )}
@@ -205,10 +206,14 @@ export function AddMonitorsForm({
         label="Also check that search engines can index the homepage (production websites only; skipped if it already has one)"
       />
       <Checkbox name="domain" label="Also watch the domain's registration expiry, daily (skipped if it already has one)" />
+      <Checkbox
+        name="speed"
+        label="Also test the homepage's speed with Google PageSpeed, daily (needs PAGESPEED_API_KEY; skipped if it already has one)"
+      />
       <p className="text-xs text-slate-500">
         {hasPages
           ? "Names come from the page path (you can rename them after). New monitors are checked within 5 minutes."
-          : "No pages listed: only the ticked extra checks are added (SSL, tags, WordPress and search visibility every 6 hours; link scan and domain daily)."}
+          : "No pages listed: only the ticked extra checks are added (SSL, tags, WordPress and search visibility every 6 hours; link scan, domain and page speed daily)."}
       </p>
       <FormActions label="Add monitors" cancelHref={`/clients/${clientId}`} />
     </form>
@@ -231,6 +236,8 @@ const TYPE_HELP: Record<MonitorType, string> = {
     "Fails if the page tells search engines not to index it (noindex, e.g. WordPress's \"Discourage search engines\") or robots.txt blocks it. For production sites.",
   domain_expiry:
     "Checks when the domain's registration expires (from its registry): warning at 30 days left, failed at 7. Only the domain of the URL is used.",
+  page_speed:
+    "Google PageSpeed (mobile): warns when the performance score is below the minimum in Settings, or real visitors' Core Web Vitals fail. Needs PAGESPEED_API_KEY.",
 };
 
 const SEVERITY_HELP: Partial<Record<MonitorType, string>> = {
@@ -241,6 +248,7 @@ const SEVERITY_HELP: Partial<Record<MonitorType, string>> = {
   wordpress_health: "Applies to backups and PHP errors. Available updates are a Warning (or nothing, per Settings).",
   search_visibility: "Applies when search engines are blocked. A robots.txt error or a canonical on another domain is a Warning.",
   domain_expiry: "Applies at 7 days left or when expired. 30 days left is a Warning.",
+  page_speed: "Page speed only ever warns: a slow page isn't an outage.",
 };
 
 const INTERVAL_HINT: Partial<Record<MonitorType, string>> = {
@@ -250,6 +258,7 @@ const INTERVAL_HINT: Partial<Record<MonitorType, string>> = {
   wordpress_health: "Every 6 hours catches a failed nightly backup the same day.",
   search_visibility: "Every 6 hours catches a noindex pushed from staging the same day.",
   domain_expiry: "Daily is plenty: expiry dates change slowly.",
+  page_speed: "Daily is plenty (each test takes up to 45 s and uses Google's quota).",
 };
 
 /** Types with their own pass/fail rules, where the page settings (expected status, text, time) don't apply. */
@@ -260,6 +269,7 @@ const OWN_RULES: MonitorType[] = [
   "wordpress_health",
   "search_visibility",
   "domain_expiry",
+  "page_speed",
 ];
 
 /** Defaults for a brand-new monitor. */
