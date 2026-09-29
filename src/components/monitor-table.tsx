@@ -11,6 +11,8 @@ import {
   linkScanInfo,
   timeAgo,
   trackingInfo,
+  visibilityInfo,
+  domainExpiryInfo,
   wordpressInfo,
 } from "@/lib/format";
 import { compareVersions } from "@/lib/monitoring/wordpress";
@@ -20,6 +22,29 @@ import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS, countsTowardUptime, formatInte
 function LastResult({ view }: { view: MonitorView }) {
   const s = view.summary;
   if (!s?.last_status) return <span className="text-slate-400">No checks yet</span>;
+  const vis = view.monitor.monitor_type === "search_visibility" ? visibilityInfo(s.last_metadata) : null;
+  if (vis) {
+    return (
+      <div className="text-xs text-slate-600">
+        {vis.noindex || vis.robotsBlocks ? (
+          <span className="text-red-700">{vis.noindex ? "Page says noindex" : "Blocked by robots.txt"}</span>
+        ) : (
+          "Open to search engines"
+        )}
+        {vis.foreignCanonical && <div className="mt-0.5 text-amber-700">Canonical on another domain</div>}
+      </div>
+    );
+  }
+  const dom = view.monitor.monitor_type === "domain_expiry" ? domainExpiryInfo(s.last_metadata) : null;
+  if (dom) {
+    return (
+      <div className="text-xs text-slate-600">
+        {dom.expiresAt ? <>Expires {formatDate(dom.expiresAt)}</> : "No expiry date"}
+        {dom.daysLeft !== null && dom.daysLeft >= 0 && <> · {dom.daysLeft} days</>}
+        {s.last_error_message && <div className="mt-0.5 text-red-700">{s.last_error_message}</div>}
+      </div>
+    );
+  }
   const wp = view.monitor.monitor_type === "wordpress_health" ? wordpressInfo(s.last_metadata) : null;
   if (wp) {
     const behind = wp.version && wp.latest && compareVersions(wp.version, wp.latest) < 0;

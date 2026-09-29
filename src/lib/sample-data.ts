@@ -118,7 +118,7 @@ export function buildSampleData(now: Date = new Date()): {
   interface SampleFailure {
     min: number;
     status: Exclude<CheckStatus, "passed">;
-    http: number;
+    http: number | null;
     ms: number;
     error: string;
   }
@@ -190,7 +190,7 @@ export function buildSampleData(now: Date = new Date()): {
 
   const fails = (
     status: SampleFailure["status"],
-    http: number,
+    http: number | null,
     error: string,
     points: [min: number, ms: number][],
   ): SampleFailure[] => points.map(([min, ms]) => ({ min, status, http, ms, error }));
@@ -351,6 +351,34 @@ export function buildSampleData(now: Date = new Date()): {
   }
 
   checkResults.sort((a, b) => b.checked_at.localeCompare(a.checked_at));
+  // Search visibility (open to search engines) and domain expiry (renewal due soon).
+  monitor(20, 1, "Search Visibility", "search_visibility", "https://harborviewdental.example/",
+    { interval: 360, severity: "critical", passingLatestMin: 90 });
+  monitor(21, 6, "Domain Expiry", "domain_expiry", "https://coastalroofingpros.example/",
+    { interval: 1440, severity: "critical", passingLatestMin: 2000,
+      failures: fails("warning", null, "Domain coastalroofingpros.example expires in 23 days", [[300, 180]]) });
+  for (const check of checkResults) {
+    if (check.monitor_id === mid(20)) {
+      check.metadata = {
+        final_url: "https://harborviewdental.example/",
+        noindex: null,
+        robots_status: 200,
+        robots_blocks: false,
+        foreign_canonical: null,
+      };
+    }
+    if (check.monitor_id === mid(21)) {
+      check.metadata = {
+        domain: "coastalroofingpros.example",
+        expires_at: new Date(now.getTime() + 23 * 86_400_000).toISOString(),
+        days_left: 23,
+        registrar: "Name.com, Inc.",
+        statuses: ["client transfer prohibited"],
+        rdap_server: "rdap.example",
+      };
+    }
+  }
+
   const summaries = monitors.map((m) => summarizeChecks(m.id, checkResults));
 
   function incident(

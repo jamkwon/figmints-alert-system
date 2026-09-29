@@ -13,6 +13,8 @@ import {
   linkScanInfo,
   trackingInfo,
   wordpressInfo,
+  visibilityInfo,
+  domainExpiryInfo,
   formatDate,
   formatDateTime,
   formatUptime,
@@ -69,6 +71,10 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
   const isLinkScan = monitor.monitor_type === "broken_links";
   const isTracking = monitor.monitor_type === "tracking_tags";
   const isWordPress = monitor.monitor_type === "wordpress_health";
+  const isVisibility = monitor.monitor_type === "search_visibility";
+  const isDomain = monitor.monitor_type === "domain_expiry";
+  const vis = isVisibility ? visibilityInfo(summary?.last_metadata) : null;
+  const dom = isDomain ? domainExpiryInfo(summary?.last_metadata) : null;
   const wp = isWordPress ? wordpressInfo(summary?.last_metadata) : null;
   const tags = isTracking ? trackingInfo(summary?.last_metadata) : null;
   const cert = isSsl ? certificateInfo(summary?.last_metadata) : null;
@@ -175,7 +181,73 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
         </Panel>
 
         <div className="space-y-6">
-          {isWordPress ? (
+          {isVisibility ? (
+            <Panel title="Search visibility">
+              {!vis ? (
+                <p className="px-4 py-4 text-sm text-slate-500">Not checked yet.</p>
+              ) : (
+                <dl>
+                  <ConfigRow label="Page">
+                    {vis.noindex ? (
+                      <>
+                        <span className="text-red-700">Tells search engines not to index it</span>
+                        <code className="mt-0.5 block text-xs break-all text-slate-500">{vis.noindex}</code>
+                        <span className="block text-xs text-slate-500">
+                          On WordPress: Settings → Reading → untick &quot;Discourage search engines&quot;.
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-fig-teal">Indexable</span>
+                    )}
+                  </ConfigRow>
+                  <ConfigRow label="robots.txt">
+                    {vis.robotsBlocks ? (
+                      <span className="text-red-700">Blocks this page</span>
+                    ) : vis.robotsStatus === null ? (
+                      <span className="text-amber-700">Couldn&apos;t be reached</span>
+                    ) : vis.robotsStatus >= 500 ? (
+                      <span className="text-amber-700">HTTP {vis.robotsStatus}: Google pauses crawling</span>
+                    ) : vis.robotsStatus >= 400 ? (
+                      <span className="text-slate-500">None (allows everything)</span>
+                    ) : (
+                      <span className="text-fig-teal">Allows this page</span>
+                    )}
+                  </ConfigRow>
+                  <ConfigRow label="Canonical URL">
+                    {vis.foreignCanonical ? (
+                      <span className="text-amber-700">
+                        Points to another domain: <span className="break-all">{vis.foreignCanonical}</span>
+                      </span>
+                    ) : (
+                      <span className="text-slate-500">This domain (or none)</span>
+                    )}
+                  </ConfigRow>
+                </dl>
+              )}
+            </Panel>
+          ) : isDomain ? (
+            <Panel title="Domain">
+              {!dom ? (
+                <p className="px-4 py-4 text-sm text-slate-500">{summary?.last_error_message ?? "Not checked yet."}</p>
+              ) : (
+                <dl>
+                  <ConfigRow label="Domain">{dom.domain}</ConfigRow>
+                  <ConfigRow label="Expires">
+                    {dom.expiresAt ? formatDate(dom.expiresAt) : <span className="text-slate-500">Unknown</span>}
+                    {dom.daysLeft !== null && (
+                      <span className={`block text-xs ${dom.daysLeft <= 30 ? "text-amber-700" : "text-slate-500"}`}>
+                        {dom.daysLeft >= 0 ? `${dom.daysLeft} days left` : "Expired"}
+                      </span>
+                    )}
+                  </ConfigRow>
+                  <ConfigRow label="Registrar">{dom.registrar ?? <span className="text-slate-500">Unknown</span>}</ConfigRow>
+                  <ConfigRow label="Status">
+                    {dom.statuses.length > 0 ? dom.statuses.join(", ") : <span className="text-slate-500">None listed</span>}
+                  </ConfigRow>
+                </dl>
+              )}
+            </Panel>
+          ) : isWordPress ? (
             <Panel title="WordPress">
               {!wp ? (
                 <p className="px-4 py-4 text-sm text-slate-500">Not checked yet.</p>
@@ -424,7 +496,7 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
               <ConfigRow label="Website">
                 {displayUrl(website.url)} · {ENVIRONMENT_LABELS[website.environment]}
               </ConfigRow>
-              {!isSsl && !isLinkScan && !isTracking && !isWordPress && (
+              {!isSsl && !isLinkScan && !isTracking && !isWordPress && !isVisibility && !isDomain && (
                 <>
                   <ConfigRow label="Expected status">
                     {monitor.expected_status_code ?? <span className="text-slate-500">200–399 (default)</span>}

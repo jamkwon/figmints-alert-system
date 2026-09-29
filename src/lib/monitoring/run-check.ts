@@ -32,6 +32,8 @@ import {
   type WpeInstall,
 } from "./wordpress.ts";
 import { isWpeConfigured, listBackups, listInstalls } from "./wpengine.ts";
+import { RDAP_BOOTSTRAP_URL, daysLeft, domainCandidates, evaluateDomain, parseRdap, rdapBaseFor } from "./domain.ts";
+import { evaluateVisibility, findNoindex, foreignCanonical, robotsBlocks } from "./visibility.ts";
 import { WP_PLUGIN_ROUTE, pluginKey, signRequest } from "./wp-plugin.ts";
 
 const TIMEOUT_MS = 15_000;
@@ -715,6 +717,151 @@ export async function performWordPressCheck(monitor: Monitor, settings: AppSetti
   return { outcome: evaluateWordPress(problems, performance.now() - started, page.response.status), metadata };
 }
 
+// Search visibility -------------------------------------------------------------------
+
+async function fetchRobots(origin: string): Promise<{ status: number | null; text: string | null }> {
+  try {
+    const { response } = await safeFetch(validateTargetUrl(`${origin}/robots.txt`), {
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      accept: "text/plain,*/*;q=0.8",
+    });
+    if (response.status >= 400) {
+      await response.body?.cancel();
+      return { status: response.status, text: null };
+    }
+    return { status: response.status, text: (await readBody(response)).text };
+  } catch {
+    return { status: null, text: null };
+  }
+}
+
+/** Is the page open to search engines: no noindex, not blocked by robots.txt, canonical on this domain. */
+export async function performVisibilityCheck(monitor: Monitor): Promise<HttpCheckResult> {
+  const started = performance.now();
+  const metadata: CheckMetadata = {};
+  const pageFailed = (partial: Partial<HttpObservation>): HttpCheckResult => ({
+    outcome: evaluateCheck(monitor, {
+      httpStatus: null,
+      statusText: "",
+      responseTimeMs: performance.now() - started,
+      body: null,
+      error: null,
+      ...partial,
+    }),
+    metadata,
+  });
+  let page: { response: Response; url: URL };
+  let html: string;
+  try {
+    page = await safeFetch(validateTargetUrl(monitor.target_url), { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    html = (await readBody(page.response)).text;
+  } catch (err) {
+    return pageFailed({ error: describeFetchError(err) });
+  }
+  const elapsed = performance.now() - started;
+  if (!isExpectedStatus(page.response.status, null)) {
+    return pageFailed({ httpStatus: page.response.status, statusText: page.response.statusText, responseTimeMs: elapsed });
+  }
+  const robots = await fetchRobots(page.url.origin);
+  const findings = {
+    noindex: findNoindex(html, page.response.headers.get("x-robots-tag")),
+    robots: { status: robots.status, blocks: robots.text !== null && robotsBlocks(robots.text, page.url.pathname) },
+    foreignCanonical: foreignCanonical(html, page.url),
+  };
+  Object.assign(metadata, {
+    final_url: page.url.toString(),
+    noindex: findings.noindex,
+    robots_status: robots.status,
+    robots_blocks: findings.robots.blocks,
+    foreign_canonical: findings.foreignCanonical,
+  });
+  return { outcome: evaluateVisibility(findings, elapsed, page.response.status), metadata };
+}
+
+// Domain expiry -----------------------------------------------------------------------
+
+const RDAP_TIMEOUT_MS = 10_000;
+const BOOTSTRAP_TTL_MS = 24 * 3_600_000;
+let bootstrapCache: { at: number; body: unknown } | null = null;
+
+/** IANA's list of RDAP servers per TLD (cached for a day). */
+async function rdapBootstrap(): Promise<unknown> {
+  if (bootstrapCache && Date.now() - bootstrapCache.at < BOOTSTRAP_TTL_MS) return bootstrapCache.body;
+  const res = await fetch(RDAP_BOOTSTRAP_URL, {
+    signal: AbortSignal.timeout(RDAP_TIMEOUT_MS),
+    headers: { "user-agent": USER_AGENT, accept: "application/json" },
+  });
+  if (!res.ok) throw new Error(`IANA's RDAP list answered HTTP ${res.status}`);
+  const body: unknown = await res.json();
+  bootstrapCache = { at: Date.now(), body };
+  return body;
+}
+
+/** When the site's domain registration expires, from the registry's RDAP service. */
+export async function performDomainCheck(monitor: Monitor): Promise<HttpCheckResult> {
+  const started = performance.now();
+  const metadata: CheckMetadata = {};
+  const warn = (message: string): HttpCheckResult => ({
+    outcome: {
+      http_status: null,
+      response_time_ms: Math.round(performance.now() - started),
+      status: "warning",
+      passed: false,
+      error_message: message,
+    },
+    metadata,
+  });
+  const candidates = domainCandidates(new URL(monitor.target_url).hostname);
+  if (candidates.length === 0) return warn("No domain name to look up");
+  let bootstrap: unknown;
+  try {
+    bootstrap = await rdapBootstrap();
+  } catch (err) {
+    return warn(`Couldn't load the list of domain registries: ${err instanceof Error ? err.message : "request failed"}`);
+  }
+  for (const domain of candidates) {
+    const base = rdapBaseFor(domain, bootstrap);
+    if (!base) return warn(`Expiry lookup isn't available for .${domain.split(".").at(-1)} domains`);
+    let response: Response;
+    try {
+      // The registry's address comes from IANA; safeFetch still refuses private addresses and re-checks redirects.
+      ({ response } = await safeFetch(validateTargetUrl(`${base}domain/${encodeURIComponent(domain)}`), {
+        signal: AbortSignal.timeout(RDAP_TIMEOUT_MS),
+        accept: "application/rdap+json, application/json",
+      }));
+    } catch (err) {
+      return warn(`Couldn't reach the domain registry: ${describeFetchError(err, RDAP_TIMEOUT_MS)}`);
+    }
+    if (response.status === 404) {
+      await response.body?.cancel();
+      continue; // Not a registered name at this level (e.g. "co.uk"); try the next.
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      return warn(`The domain registry answered HTTP ${response.status}`);
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse((await readBody(response)).text);
+    } catch {
+      return warn("The domain registry's answer couldn't be read");
+    }
+    const info = parseRdap(domain, body);
+    // "co.uk" and similar exist in their registry but aren't registrations: try the longer name.
+    if (!info.expiresAt && domain !== candidates.at(-1)) continue;
+    Object.assign(metadata, {
+      domain,
+      expires_at: info.expiresAt,
+      days_left: info.expiresAt ? daysLeft(info.expiresAt, new Date()) : null,
+      registrar: info.registrar,
+      statuses: info.statuses,
+      rdap_server: new URL(base).hostname,
+    });
+    return { outcome: evaluateDomain(info, new Date(), performance.now() - started), metadata };
+  }
+  return warn(`The registry doesn't know ${candidates.join(" or ")}`);
+}
+
 /** Runs the right kind of check for the monitor, with the rules from Settings. */
 export function performCheck(monitor: Monitor, settings: AppSettings = DEFAULT_SETTINGS): Promise<HttpCheckResult> {
   // Monitors without their own response time limit use the Settings default.
@@ -723,5 +870,7 @@ export function performCheck(monitor: Monitor, settings: AppSettings = DEFAULT_S
   if (m.monitor_type === "broken_links") return performBrokenLinksCheck(m);
   if (m.monitor_type === "tracking_tags") return performTrackingCheck(m);
   if (m.monitor_type === "wordpress_health") return performWordPressCheck(m, settings);
+  if (m.monitor_type === "search_visibility") return performVisibilityCheck(m);
+  if (m.monitor_type === "domain_expiry") return performDomainCheck(m);
   return performHttpCheck(m);
 }

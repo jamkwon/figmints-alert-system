@@ -20,6 +20,7 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 - **Phase 7 (WordPress / WP Engine), Stage A: done.** A *WordPress Health* monitor checks WordPress and PHP versions, visible plugins, and WP Engine install status and backups. See **WordPress health**. Evaluation: `docs/phase-7-wordpress-evaluation.md`.
 - **Phase 7: import from WP Engine done.** **Clients → Import from WP Engine** adds production sites from WP Engine as clients, with uptime, SSL and WordPress checks. See **Importing sites from WP Engine**.
 - **Phase 7, Stage B (WordPress plugin): done.** An optional read-only plugin lets WordPress Health checks see every plugin and theme with its available update (premium included), exact WordPress/PHP versions, debug mode, WP-Cron and **fatal PHP errors**. See **WordPress plugin**.
+- **Search visibility and domain expiry: done.** A *Search Visibility* monitor fails if a production site tells search engines not to index it or robots.txt blocks it; a *Domain Expiry* monitor warns before the domain registration runs out. See **Search visibility** and **Domain expiry**.
 
 Running checks and updating incidents require Supabase. On sample data those controls are disabled.
 
@@ -98,6 +99,7 @@ The schema lives in `supabase/migrations/`. Sample data lives in `supabase/seed.
    - `20260930000000_wordpress_health.sql` (Phase 7, WordPress health)
    - `20261001000000_weekly_summary.sql` (Phase 9, weekly summary)
    - `20261002000000_app_settings.sql` (editable monitoring rules)
+   - `20261003000000_seo_domain.sql` (Search Visibility and Domain Expiry monitors)
 3. (Optional) Run `supabase/seed.sql` to load the 6 sample clients. You can re-run it safely; it replaces the earlier sample rows.
 4. Copy the project URL and the secret key into `.env.local`, then restart `npm run dev`.
 
@@ -167,6 +169,8 @@ src/
       wpengine.ts       WP Engine API client (read-only: sites, installs, backups)
       wpengine-import.ts  Which WP Engine installs aren't monitored yet (import page)
       wp-plugin.ts      The Website Watch Health WordPress plugin (PHP source, request signing)
+      visibility.ts     noindex, robots.txt (Google's rules) and canonical checks
+      domain.ts         Domain expiry from the registry's RDAP service
       url-safety.ts     SSRF protection
       incident-engine.ts Pure rules: when to open, update or resolve an incident
       record.ts         Runs a check, saves the result, applies incident rules
@@ -191,6 +195,8 @@ Each check makes one `GET` request to the monitor's target URL and stores the re
 | Response Time | Status passes **and** the full response takes no longer than *max response time* (default 3000 ms, changeable in **Settings**) | Warning (slow) |
 | WordPress Health | No backup problems and nothing out of date | Failed on backup problems (uses the monitor's severity; default Critical); Warning for outdated WordPress, PHP or plugins |
 | Tracking Tags | The page loads and every expected tag is in its HTML | Failed, naming the missing tags (uses the monitor's severity; default Warning) |
+| Search Visibility | The page doesn't say noindex, robots.txt doesn't block it, and its canonical URL is on the same domain | Failed when search engines are kept out (monitor severity, Critical by default); Warning for a robots.txt error or a canonical on another domain |
+| Domain Expiry | The domain registration has more than 30 days left | Warning at 30 days or less; Failed at 7 days or less, expired, or in its redemption period |
 | Broken Links | The page loads and none of its first 40 links/images/stylesheets/scripts are broken | Warning when any are broken; Failed only if the page itself doesn't load |
 | SSL Certificate | The certificate is trusted, matches the domain, and has more than 14 days left | Warning at 14 days or less; Failed at 3 days or less, or when expired, untrusted or for the wrong domain (both day limits in **Settings**) |
 
@@ -322,6 +328,27 @@ Website Watch only **reads** from WP Engine: it lists sites, installs and backup
 - The page shows how many **scheduled checks a day** the import adds, and warns when that's more than the scheduler can run (see **Checking many sites**).
 
 Domains always come from WP Engine on the server, never from the form, and go through the same URL safety rules as every other check.
+
+### Search visibility
+
+A **Search Visibility** monitor makes sure a production site hasn't quietly disappeared from Google. It's easy to happen on WordPress: copying staging to production can bring WordPress's **"Discourage search engines from indexing this site"** setting along with it.
+
+- **Failed** (monitor severity, Critical by default, so it posts to Slack):
+  - the page says **noindex** (or `none`) in a `<meta name="robots">` / `googlebot` tag, which is what WordPress's "Discourage search engines" adds, or in an `X-Robots-Tag` header;
+  - **robots.txt blocks** the page for Googlebot, following Google's rules (the most specific user-agent group, the longest matching rule, a tie goes to Allow; an empty `Disallow:` allows everything).
+- **Warning:** robots.txt answers a server error or can't be reached (Google pauses crawling then), or the page's **canonical URL points to another domain** (e.g. still the staging site). A missing robots.txt (404) is fine.
+- **Adding one:** tick **Also check that search engines can index the homepage** on **Add client** or **Add monitors**. It's only added to **production** websites, because staging sites are meant to be hidden. Checked every 6 hours.
+
+### Domain expiry
+
+A **Domain Expiry** monitor watches when the site's domain registration runs out. An expired domain takes the website *and* email down.
+
+- It asks the domain's registry through **RDAP** (the modern, public WHOIS). No account or key: IANA publishes which registry serves each ending (`.com`, `.org`, `.co.uk`...), and that list is cached for a day. It looks up the registered name, so `www.shop.example.co.uk` checks `example.co.uk`.
+- **Warning** at **30 days** left; **Failed** at **7 days** or less, when expired, or in the registry's *redemption period*.
+- The monitor page shows the expiry date, days left, registrar and registry status (e.g. *client transfer prohibited*, which means the domain is locked against unauthorized transfers).
+- The **weekly summary** lists domains expiring within **60 days**, earlier than the warning.
+- A few endings (e.g. `.io`) have no RDAP service: the check then says so as a Warning, and can be deleted.
+- **Adding one:** tick **Also watch the domain's registration expiry** on **Add client** or **Add monitors**. Checked daily.
 
 ### Tracking tags
 

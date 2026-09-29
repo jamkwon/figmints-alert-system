@@ -81,6 +81,13 @@ test("lists incidents, backups, certificates, WordPress updates, links and tags"
     { ...base, monitorType: "broken_links", metadata: { links_checked: 40, broken_links: [{ url: "x" }, { url: "y" }] } },
     {
       ...base,
+      monitorType: "search_visibility",
+      lastStatus: "failed",
+      lastErrorMessage: "Page tells search engines not to index it (<meta name=\"robots\" content=\"noindex\">)",
+    },
+    { ...base, monitorType: "domain_expiry", metadata: { domain: "figmints.com", expires_at: "2026-11-15T00:00:00Z", days_left: 47 } },
+    {
+      ...base,
       monitorType: "tracking_tags",
       metadata: { tags_found: { gtm: ["GTM-1"] }, tags_expected: ["gtm", "ga4"] },
     },
@@ -107,6 +114,8 @@ test("lists incidents, backups, certificates, WordPress updates, links and tags"
   assert.match(all, /WordPress 7\.0\.5 → 7\.1\.2 · 1 plugin update \(Gravity Forms\) · 1 theme update/);
   assert.match(all, /figmints\.com: expires .* \(12 days\)/);
   assert.match(all, /2 broken links/);
+  assert.match(all, /Search visibility.*:red_circle: \*Figmints\* figmints\.com: Page tells search engines not to index it \(&lt;meta/);
+  assert.match(all, /Domains expiring within 60 days.*figmints\.com expires Nov 1[45], 2026 \(47 days\)/);
   assert.match(all, /missing Google Analytics 4|missing GA4/);
   assert.match(all, /Open Website Watch/);
   assert.match(s.text, /2 incidents this week, 2 still open/);
