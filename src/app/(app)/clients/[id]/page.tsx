@@ -8,14 +8,14 @@ import { MonitorTable } from "@/components/monitor-table";
 import { HealthBadge, HealthDot } from "@/components/status";
 import { EmptyState, LinkButton, Panel, PageHeader, When } from "@/components/ui";
 import { UptimeBars, UptimeLegend } from "@/components/uptime-bars";
-import { getAppData, getDailyUptime } from "@/lib/data";
+import { getClientAppData, getDailyUptime } from "@/lib/data";
 import { dayBars, recentDays } from "@/lib/uptime-history";
 import { APP_TIMEZONE, displayUrl, formatDateTime, formatUptime, isInFuture } from "@/lib/format";
 import { ENVIRONMENT_LABELS, countsTowardUptime } from "@/lib/labels";
 
 async function findClient(id: string) {
-  const data = await getAppData();
-  return { view: data.clients.find((c) => c.client.id === id), sampleMode: data.source === "sample" };
+  const data = await getClientAppData(id);
+  return { view: data?.clients.find((c) => c.client.id === id), sampleMode: data?.source === "sample" };
 }
 
 export async function generateMetadata({ params }: PageProps<"/clients/[id]">): Promise<Metadata> {

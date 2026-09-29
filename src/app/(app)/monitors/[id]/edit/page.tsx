@@ -3,13 +3,13 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { MonitorForm } from "@/components/manage-forms";
 import { Panel, PageHeader } from "@/components/ui";
-import { getAppData } from "@/lib/data";
+import { getAppDataFor } from "@/lib/data";
 
 export const metadata: Metadata = { title: "Edit monitor" };
 
 export default async function EditMonitorPage({ params }: PageProps<"/monitors/[id]/edit">) {
   const { id } = await params;
-  const view = (await getAppData()).monitors.find((m) => m.monitor.id === id);
+  const view = (await getAppDataFor("monitor", id))?.monitors.find((m) => m.monitor.id === id);
   if (!view) notFound();
   return (
     <>

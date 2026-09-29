@@ -1,7 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-import { isStaff, parseAllowedDomains, type StaffClaims } from "@/lib/auth/allowed";
-import { PUBLIC_KEY_VARS, URL_VARS, firstSetEnv, isSupabaseConfigured } from "@/lib/supabase/config";
+import { authModeFor, isStaff, parseAllowedDomains, type StaffClaims } from "@/lib/auth/allowed";
+import { PUBLIC_KEY_VARS, SECRET_KEY_VARS, URL_VARS, firstSetEnv } from "@/lib/supabase/config";
 
 // Runs before every page and server action: refreshes the Supabase login session
 // and sends anyone who isn't signed-in staff to /login. Pages, data loading and
@@ -12,12 +12,18 @@ const PUBLIC_PATHS = ["/login", "/auth/"];
 export async function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
   if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p))) return NextResponse.next();
-  // Sample-data mode: no real data, no login.
-  if (!isSupabaseConfigured()) return NextResponse.next();
-
   const url = firstSetEnv(URL_VARS);
   const key = firstSetEnv(PUBLIC_KEY_VARS);
-  if (!url || !key) return redirectToLogin(request, "config");
+  const mode = authModeFor({
+    url: url !== undefined,
+    secretKey: firstSetEnv(SECRET_KEY_VARS) !== undefined,
+    publicKey: key !== undefined,
+    onVercel: Boolean(process.env.VERCEL),
+  });
+  // Sample-data mode (no Supabase settings at all, not on Vercel): no real data, no login.
+  if (mode === "disabled") return NextResponse.next();
+  // Some settings missing: locked, never open.
+  if (mode === "misconfigured" || !url || !key) return redirectToLogin(request, "config");
 
   let response = NextResponse.next({ request });
   const supabase = createServerClient(url.value, key.value, {

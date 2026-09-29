@@ -54,3 +54,10 @@ test("many clients: at most the limit, then '…and N more'", () => {
   assert.match(all, /…and 5 more/);
   assert.doesNotMatch(all, /Open Website Watch/, "no button without the app's address");
 });
+
+test("the monthly post says when some clients couldn't be summarized in time", () => {
+  const msg = buildMonthlyReportsMessage("September 2026", [], "https://watch.example", 3);
+  assert.match(JSON.stringify(msg.blocks), /3 clients couldn't be summarized in time/);
+  const none = buildMonthlyReportsMessage("September 2026", [], "https://watch.example");
+  assert.doesNotMatch(JSON.stringify(none.blocks), /in time/);
+});

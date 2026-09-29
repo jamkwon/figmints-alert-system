@@ -1,6 +1,7 @@
 import "server-only";
 import { logIncidentEvent, SYSTEM_ACTOR } from "@/lib/monitoring/incident-events";
 import { alertFor, buildSlackMessage, type IncidentChange } from "@/lib/notify/alerts";
+import { getSettings } from "@/lib/settings-store";
 import { firstSetEnv } from "@/lib/supabase/config";
 import { getSupabase } from "@/lib/supabase/server";
 import type { Incident } from "@/lib/types";
@@ -93,6 +94,7 @@ export async function notifyIncidentChange(change: IncidentChange, incidentId: s
         error: latestFailure?.data?.error_message ?? null,
         appUrl: appUrl(),
         actor: actor && actor !== SYSTEM_ACTOR ? actor : null,
+        passesToResolve: kind === "resolved" ? (await getSettings()).passesToResolve : undefined,
       }),
     );
 

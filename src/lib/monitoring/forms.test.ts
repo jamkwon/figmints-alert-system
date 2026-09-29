@@ -161,3 +161,10 @@ test("HubSpot's answer: live, deleted (404), unpublished, or no answer", () => {
   assert.match(run([{ id, status: "unpublished", fields: null }]).error_message!, /isn't published/);
   assert.equal(run([{ id, status: "unknown", fields: null }]).status, "passed", "HubSpot not answering isn't the site's fault");
 });
+
+test("a hostile page can't make stored results huge", () => {
+  const many = Array.from({ length: 50 }, (_, i) => `<form><input name="f${i}"><button>Send</button></form>`).join("");
+  assert.equal(detectForms(many).forms.length, 20);
+  const long = detectForms(`<div class="hs-form-frame" data-portal-id="1" data-form-id="${"a".repeat(5000)}"></div>`);
+  assert.equal(long.embeds[0].id!.length, 64);
+});

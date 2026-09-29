@@ -67,7 +67,13 @@ function line(c: ClientReportLine): string {
 }
 
 /** One Slack message for the month: a line per client, most in need of a look first. */
-export function buildMonthlyReportsMessage(monthLabel: string, clients: ClientReportLine[], appUrl: string | null): { text: string; blocks: unknown[] } {
+export function buildMonthlyReportsMessage(
+  monthLabel: string,
+  clients: ClientReportLine[],
+  appUrl: string | null,
+  /** Clients whose reports couldn't be built in time. */
+  notBuilt = 0,
+): { text: string; blocks: unknown[] } {
   const sorted = [...clients].sort(
     (a, b) => Number(needsAttention(b.report)) - Number(needsAttention(a.report)) || a.clientName.localeCompare(b.clientName),
   );
@@ -99,7 +105,13 @@ export function buildMonthlyReportsMessage(monthLabel: string, clients: ClientRe
     { type: "divider" },
     ...sections.map((text) => ({ type: "section", text: { type: "mrkdwn", text } })),
   ];
-  if (more > 0) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: `…and ${more} more: see *Clients* in Website Watch.` }] });
+  if (more > 0 || notBuilt > 0) {
+    const text = [
+      more > 0 ? `…and ${more} more` : "",
+      notBuilt > 0 ? `${plural(notBuilt, "client")} couldn't be summarized in time` : "",
+    ].filter(Boolean).join("; ");
+    blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: `${text}: see *Clients* in Website Watch.` }] });
+  }
   if (appUrl) {
     blocks.push({ type: "actions", elements: [{ type: "button", text: { type: "plain_text", text: "Open Website Watch" }, url: appUrl }] });
   }

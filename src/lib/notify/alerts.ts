@@ -36,6 +36,8 @@ export interface AlertContext {
   appUrl: string | null;
   /** Who resolved it, for manual resolutions. */
   actor?: string | null;
+  /** The "passes to resolve" rule from Settings, for automatic resolutions. */
+  passesToResolve?: number;
 }
 
 const HEADLINES: Record<AlertKind, { emoji: string; label: string; note?: string }> = {
@@ -69,7 +71,7 @@ export function buildSlackMessage(ctx: AlertContext): { text: string; blocks: un
 
   const context: string[] = [];
   if (head.note) context.push(head.note);
-  if (ctx.kind === "resolved") context.push(ctx.actor ? `Resolved by ${esc(ctx.actor)}` : "Resolved automatically after 2 successful checks");
+  if (ctx.kind === "resolved") context.push(ctx.actor ? `Resolved by ${esc(ctx.actor)}` : `Resolved automatically after ${ctx.passesToResolve ?? 2} successful checks`);
   if (ctx.targetUrl) context.push(`<${ctx.targetUrl}|${esc(ctx.targetUrl.replace(/^https?:\/\//, ""))}>`);
 
   const blocks: unknown[] = [

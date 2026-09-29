@@ -167,6 +167,8 @@ export interface WordPressInfo {
     generated_at: string | null;
     updates_checked_at: string | null;
     memory_limit: string | null;
+    /** The Website Watch Health plugin's own version. */
+    plugin_version?: string | null;
     themes: { slug: string; name: string; version: string | null; latest: string | null; active: boolean }[];
     /** Last 7 days, newest first; null or missing when the site's plugin is older than 1.2. */
     fatal_errors?: WordPressFatalError[] | null;

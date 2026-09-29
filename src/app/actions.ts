@@ -51,10 +51,17 @@ export async function runCheckAction(monitorId: string): Promise<RunCheckResult>
   if (!monitor.active || !websites.active || !websites.clients.active) {
     return { ok: false, message: "This monitor is paused." };
   }
-  if (
-    monitor.last_checked_at &&
-    Date.now() - new Date(monitor.last_checked_at).getTime() < MIN_SECONDS_BETWEEN_RUNS * 1000
-  ) {
+  // Claim the run in one conditional update, so several clicks or tabs at once
+  // can't each start a check.
+  const cutoff = new Date(Date.now() - MIN_SECONDS_BETWEEN_RUNS * 1000).toISOString();
+  const claim = await db
+    .from("monitors")
+    .update({ last_checked_at: new Date().toISOString() })
+    .eq("id", monitorId)
+    .or(`last_checked_at.is.null,last_checked_at.lt.${cutoff}`)
+    .select("id");
+  if (claim.error) return { ok: false, message: `Could not start the check: ${claim.error.message}` };
+  if (claim.data.length === 0) {
     return { ok: false, message: "Checked a moment ago. Try again in a few seconds." };
   }
 
@@ -140,15 +147,18 @@ export async function setIncidentStatusAction(
 
   const now = Date.now();
   const snoozedUntil = status === "snoozed" ? new Date(now + snoozeHours! * 3_600_000).toISOString() : null;
-  const { error } = await getSupabase()
+  const { data: updated, error } = await getSupabase()
     .from("incidents")
     .update({
       status,
       resolved_at: status === "resolved" ? new Date(now).toISOString() : null,
       snoozed_until: snoozedUntil,
     })
-    .eq("id", incidentId);
+    .eq("id", incidentId)
+    .is("resolved_at", null)
+    .select("id");
   if (error) return { ok: false, message: `Could not update incident: ${error.message}` };
+  if (updated.length === 0) return { ok: false, message: "This incident is already closed." };
 
   const message =
     status === "snoozed"

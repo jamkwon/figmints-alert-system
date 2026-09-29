@@ -31,9 +31,14 @@ export interface FormFindings {
   captcha: boolean;
 }
 
+/** Pages control these values: stored results keep at most this much. */
+const MAX_FORMS = 20;
+const MAX_EMBEDS = 10;
+const MAX_ID = 64;
+
 function attr(tag: string, name: string): string | null {
   const m = tag.match(new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i"));
-  return m ? (m[1] ?? m[2] ?? m[3] ?? "") : null;
+  return m ? (m[1] ?? m[2] ?? m[3] ?? "").slice(0, MAX_ID) : null;
 }
 
 function builderOf(formTag: string): { builder: string; id: string | null } {
@@ -86,7 +91,7 @@ export function detectForms(html: string): FormFindings {
   const scriptUrl = script ? (script[1].startsWith("//") ? `https:${script[1]}` : script[1]) : null;
   // Classic embed: hbspt.forms.create({ portalId, formId, region }).
   for (const m of html.matchAll(/hbspt\.forms\.create\(\s*\{[\s\S]*?\}\s*\)/g)) {
-    const value = (key: string) => m[0].match(new RegExp(`${key}\\s*:\\s*["']?([A-Za-z0-9-]+)["']?`))?.[1] ?? null;
+    const value = (key: string) => m[0].match(new RegExp(`${key}\\s*:\\s*["']?([A-Za-z0-9-]{1,64})["']?`))?.[1] ?? null;
     embeds.push({ builder: "HubSpot", id: value("formId"), portalId: value("portalId"), region: value("region"), scriptUrl });
   }
   // Newer embed: <div class="hs-form-frame" data-portal-id data-form-id data-region>.
@@ -113,8 +118,8 @@ export function detectForms(html: string): FormFindings {
   }
 
   return {
-    forms,
-    embeds,
+    forms: forms.slice(0, MAX_FORMS),
+    embeds: embeds.slice(0, MAX_EMBEDS),
     errors,
     captcha: /recaptcha|hcaptcha|turnstile/i.test(html),
   };

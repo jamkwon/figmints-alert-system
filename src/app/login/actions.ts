@@ -2,16 +2,25 @@
 
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { NEXT_PATH_COOKIE, safeNextPath } from "@/lib/auth/allowed";
+import { NEXT_PATH_COOKIE, safeNextPath, trustedOrigin } from "@/lib/auth/allowed";
+import { appUrl } from "@/lib/notify/send";
 import { allowedDomains, createAuthClient, getAuthMode } from "@/lib/auth/session";
 
-async function requestOrigin(): Promise<string> {
+/**
+ * Where Google should send people back: this request's origin if it's one of the
+ * app's own addresses (so previews and localhost work), otherwise APP_URL.
+ * Supabase's Redirect URLs allow list is the main guard; this is a second one.
+ */
+async function returnOrigin(): Promise<string | null> {
   const h = await headers();
-  const origin = h.get("origin");
-  if (origin) return origin;
   const host = h.get("x-forwarded-host") ?? h.get("host");
   const proto = h.get("x-forwarded-proto") ?? "https";
-  return `${proto}://${host}`;
+  const origin = h.get("origin") ?? (host ? `${proto}://${host}` : null);
+  return trustedOrigin(
+    origin,
+    [appUrl(), process.env.VERCEL_URL, process.env.VERCEL_BRANCH_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL],
+    appUrl(),
+  );
 }
 
 /** Starts Google sign-in. Supabase only redirects back to URLs on its allow list. */
@@ -26,11 +35,13 @@ export async function signInWithGoogle(formData: FormData) {
     path: "/auth",
     maxAge: 600,
   });
+  const origin = await returnOrigin();
+  if (!origin) redirect("/login?error=config");
   const supabase = await createAuthClient();
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: "google",
     options: {
-      redirectTo: `${await requestOrigin()}/auth/callback`,
+      redirectTo: `${origin}/auth/callback`,
       // hd pre-selects the Figmints Google Workspace. It's only a hint; the domain
       // is enforced after sign-in (auth/callback, proxy, requireStaff).
       queryParams: { hd: allowedDomains()[0], prompt: "select_account" },

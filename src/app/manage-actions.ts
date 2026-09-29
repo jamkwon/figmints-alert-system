@@ -3,12 +3,15 @@
 import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
 import { getStaffUser, isStaffRequest } from "@/lib/auth/session";
+import { logIncidentEvent } from "@/lib/monitoring/incident-events";
+import { notifyIncidentChange } from "@/lib/notify/send";
 import { detectTrackingOnPage } from "@/lib/monitoring/run-check";
 import { MAINTENANCE_HOURS } from "@/lib/labels";
 import { MAX_IMPORT, buildCandidates, monitorsForImport } from "@/lib/monitoring/wpengine-import";
 import { listInstalls, listSites } from "@/lib/monitoring/wpengine";
 import { parseSettingsForm } from "@/lib/settings";
 import { saveSettings } from "@/lib/settings-store";
+import { fetchAllRows } from "@/lib/supabase/paginate";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
 import type { Monitor, Website } from "@/lib/types";
 import {
@@ -480,7 +483,7 @@ export async function saveMonitorAction(_prev: FormState, formData: FormData): P
     const id = idFrom(formData, "id");
     if (!id) throw new Error("Unknown monitor.");
     const db = getSupabase();
-    const existing = await db.from("monitors").select("website_id, active").eq("id", id).maybeSingle();
+    const existing = await db.from("monitors").select("website_id, active, interval_minutes").eq("id", id).maybeSingle();
     fail("load monitor", existing.error);
     if (!existing.data) throw new Error("Unknown monitor.");
     const website = await loadWebsite(existing.data.website_id);
@@ -490,13 +493,36 @@ export async function saveMonitorAction(_prev: FormState, formData: FormData): P
       .update({
         ...fields,
         name: parseName(formData.get("name")),
-        // Resuming a paused monitor makes it due right away.
-        ...(fields.active && !existing.data.active ? { next_check_at: null } : {}),
+        // Resuming a paused monitor, or changing how often it runs, makes it due right
+        // away (otherwise a daily → 5 minute change would wait out the old day).
+        ...(fields.active && (!existing.data.active || fields.interval_minutes !== existing.data.interval_minutes)
+          ? { next_check_at: null }
+          : {}),
       })
       .eq("id", id);
     fail("save monitor", error);
+    if (!fields.active && existing.data.active) await closeIncidentsOfPausedMonitor(id);
     return `/monitors/${id}`;
   });
+}
+
+/**
+ * A paused monitor isn't checked, so its open incident would never resolve by
+ * itself: close it, noting why.
+ */
+async function closeIncidentsOfPausedMonitor(monitorId: string): Promise<void> {
+  const actor = (await getStaffUser())?.email ?? "staff";
+  const { data, error } = await getSupabase()
+    .from("incidents")
+    .update({ status: "resolved", resolved_at: new Date().toISOString(), snoozed_until: null })
+    .eq("monitor_id", monitorId)
+    .is("resolved_at", null)
+    .select("id");
+  fail("close incidents", error);
+  for (const { id } of data ?? []) {
+    await logIncidentEvent(id, actor, "resolved", "Closed because the monitor was paused");
+    await notifyIncidentChange("resolved", id, actor);
+  }
 }
 
 // Import from WP Engine ------------------------------------------------------------
@@ -519,8 +545,8 @@ export async function importFromWpeAction(_prev: FormState, formData: FormData):
     const [installs, sites, websites, clients] = await Promise.all([
       listInstalls(),
       listSites(),
-      db.from("websites").select("url, client_id"),
-      db.from("clients").select("id, name"),
+      fetchAllRows((from, to) => db.from("websites").select("url, client_id").order("id").range(from, to)),
+      fetchAllRows((from, to) => db.from("clients").select("id, name").order("id").range(from, to)),
     ]);
     fail("load websites", websites.error);
     fail("load clients", clients.error);

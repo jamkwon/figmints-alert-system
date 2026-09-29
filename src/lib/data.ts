@@ -16,6 +16,7 @@ import { APP_TIMEZONE } from "@/lib/format";
 import type { ReportInput, ReportMonth } from "@/lib/report";
 import { countByDay, type DayCount } from "@/lib/uptime-history";
 import { buildSampleData } from "@/lib/sample-data";
+import { fetchAllRows } from "@/lib/supabase/paginate";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
 import type {
   CheckResult,
@@ -30,8 +31,8 @@ import type {
   Website,
 } from "@/lib/types";
 
-// Phase 1 loads the whole (small) dataset per request and derives views in code.
-// Fine for tens of clients; revisit with targeted queries if it grows.
+// List pages load the whole (small) dataset per request and derive views in code;
+// detail pages load only their client (getClientAppData / getAppDataFor).
 const INCIDENT_LIMIT = 500;
 
 export type DataSource = "supabase" | "sample";
@@ -48,41 +49,157 @@ const loadSnapshot = cache(async (): Promise<Snapshot> => {
   if (!isSupabaseConfigured()) return loadSampleData().snapshot;
 
   const db = getSupabase();
-  const [clients, websites, monitors, summaries, incidents, uptime] = await Promise.all([
-    db.from("clients").select("*").order("name"),
-    db.from("websites").select("*").order("name"),
-    db.from("monitors").select("*").order("name"),
-    db.from("monitor_check_summary").select("*"),
+  // Every row, past the API's 1,000-row limit (ordered by id too, so pages don't overlap).
+  const [clients, websites, monitors, summaries, recentIncidents, unresolvedIncidents, uptime] = await Promise.all([
+    fetchAllRows((from, to) => db.from("clients").select("*").order("name").order("id").range(from, to)),
+    fetchAllRows((from, to) => db.from("websites").select("*").order("name").order("id").range(from, to)),
+    fetchAllRows((from, to) => db.from("monitors").select("*").order("name").order("id").range(from, to)),
+    fetchAllRows((from, to) => db.from("monitor_check_summary").select("*").order("monitor_id").range(from, to)),
     db
       .from("incidents")
       .select("*")
       .order("first_detected_at", { ascending: false })
       .limit(INCIDENT_LIMIT),
-    db.from("monitor_uptime").select("*"),
+    // Older history is capped, but anything still open always counts.
+    fetchAllRows((from, to) => db.from("incidents").select("*").is("resolved_at", null).order("id").range(from, to)),
+    fetchAllRows((from, to) => db.from("monitor_uptime").select("*").order("monitor_id").range(from, to)),
   ]);
 
-  for (const [table, result] of Object.entries({ clients, websites, monitors, summaries, incidents, uptime })) {
-    if (result.error) throw new Error(`Failed to load ${table}: ${result.error.message}`);
-  }
-
+  throwFirstError({ clients, websites, monitors, summaries, recentIncidents, unresolvedIncidents, uptime });
   return {
     clients: clients.data as Client[],
     websites: websites.data as Website[],
     monitors: monitors.data as Monitor[],
     summaries: summaries.data as MonitorCheckSummary[],
-    incidents: incidents.data as Incident[],
-    // Postgres count() arrives as a string over the API; normalize to numbers.
-    uptime: (uptime.data as Record<string, string | number>[]).map((row) => ({
-      monitor_id: String(row.monitor_id),
-      checks_24h: Number(row.checks_24h),
-      passed_24h: Number(row.passed_24h),
-      checks_7d: Number(row.checks_7d),
-      passed_7d: Number(row.passed_7d),
-      checks_30d: Number(row.checks_30d),
-      passed_30d: Number(row.passed_30d),
-    })),
+    incidents: mergeIncidents(recentIncidents.data as Incident[], unresolvedIncidents.data as Incident[]),
+    uptime: normalizeUptime(uptime.data as Record<string, string | number>[]),
   };
 });
+
+type Loaded = { error: { message: string } | null };
+const NONE = { data: [], error: null };
+
+function throwFirstError(results: Record<string, Loaded>): void {
+  for (const [table, result] of Object.entries(results)) {
+    if (result.error) throw new Error(`Failed to load ${table}: ${result.error.message}`);
+  }
+}
+
+/** The most recent incidents, plus any older ones that are still unresolved. */
+function mergeIncidents(recent: Incident[], unresolved: Incident[]): Incident[] {
+  const ids = new Set(recent.map((i) => i.id));
+  return [...recent, ...unresolved.filter((i) => !ids.has(i.id))];
+}
+
+/** Postgres count() arrives as a string over the API; normalize to numbers. */
+function normalizeUptime(rows: Record<string, string | number>[]): MonitorUptime[] {
+  return rows.map((row) => ({
+    monitor_id: String(row.monitor_id),
+    checks_24h: Number(row.checks_24h),
+    passed_24h: Number(row.passed_24h),
+    checks_7d: Number(row.checks_7d),
+    passed_7d: Number(row.passed_7d),
+    checks_30d: Number(row.checks_30d),
+    passed_30d: Number(row.passed_30d),
+  }));
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** One client's part of the snapshot, for sample data. */
+function scopeSnapshot(s: Snapshot, clientId: string): Snapshot | null {
+  const clients = s.clients.filter((c) => c.id === clientId);
+  if (clients.length === 0) return null;
+  const websites = s.websites.filter((w) => w.client_id === clientId);
+  const websiteIds = new Set(websites.map((w) => w.id));
+  const monitors = s.monitors.filter((m) => websiteIds.has(m.website_id));
+  const monitorIds = new Set(monitors.map((m) => m.id));
+  return {
+    clients,
+    websites,
+    monitors,
+    summaries: s.summaries.filter((x) => monitorIds.has(x.monitor_id)),
+    incidents: s.incidents.filter((i) => i.client_id === clientId),
+    uptime: s.uptime.filter((x) => monitorIds.has(x.monitor_id)),
+  };
+}
+
+/**
+ * Only one client's rows: what a client, monitor, incident or website page needs,
+ * without loading every client. Null if there's no such client.
+ */
+const loadClientSnapshot = cache(async (clientId: string): Promise<Snapshot | null> => {
+  await connection();
+  if (!isSupabaseConfigured()) return scopeSnapshot(loadSampleData().snapshot, clientId);
+  if (!UUID.test(clientId)) return null;
+
+  const db = getSupabase();
+  const [client, websites] = await Promise.all([
+    db.from("clients").select("*").eq("id", clientId).maybeSingle(),
+    fetchAllRows((from, to) => db.from("websites").select("*").eq("client_id", clientId).order("name").order("id").range(from, to)),
+  ]);
+  throwFirstError({ client, websites });
+  if (!client.data) return null;
+  const websiteIds = (websites.data as Website[]).map((w) => w.id);
+  const monitors = websiteIds.length
+    ? await fetchAllRows((from, to) =>
+        db.from("monitors").select("*").in("website_id", websiteIds).order("name").order("id").range(from, to),
+      )
+    : NONE;
+  throwFirstError({ monitors });
+  const monitorIds = (monitors.data as Monitor[]).map((m) => m.id);
+  const [summaries, recentIncidents, unresolvedIncidents, uptime] = await Promise.all([
+    monitorIds.length
+      ? fetchAllRows((from, to) =>
+          db.from("monitor_check_summary").select("*").in("monitor_id", monitorIds).order("monitor_id").range(from, to),
+        )
+      : NONE,
+    db
+      .from("incidents")
+      .select("*")
+      .eq("client_id", clientId)
+      .order("first_detected_at", { ascending: false })
+      .limit(INCIDENT_LIMIT),
+    fetchAllRows((from, to) =>
+      db.from("incidents").select("*").eq("client_id", clientId).is("resolved_at", null).order("id").range(from, to),
+    ),
+    monitorIds.length
+      ? fetchAllRows((from, to) =>
+          db.from("monitor_uptime").select("*").in("monitor_id", monitorIds).order("monitor_id").range(from, to),
+        )
+      : NONE,
+  ]);
+  throwFirstError({ summaries, recentIncidents, unresolvedIncidents, uptime });
+  return {
+    clients: [client.data as Client],
+    websites: websites.data as Website[],
+    monitors: monitors.data as Monitor[],
+    summaries: summaries.data as MonitorCheckSummary[],
+    incidents: mergeIncidents(recentIncidents.data as Incident[], unresolvedIncidents.data as Incident[]),
+    uptime: normalizeUptime(uptime.data as Record<string, string | number>[]),
+  };
+});
+
+/** Which client a monitor, incident or website belongs to; null if it doesn't exist. */
+async function clientIdFor(kind: "monitor" | "incident" | "website", id: string): Promise<string | null> {
+  await connection();
+  if (!isSupabaseConfigured()) {
+    const s = loadSampleData().snapshot;
+    const websiteClient = (websiteId: string | undefined) => s.websites.find((w) => w.id === websiteId)?.client_id ?? null;
+    if (kind === "incident") return s.incidents.find((i) => i.id === id)?.client_id ?? null;
+    if (kind === "website") return websiteClient(id);
+    return websiteClient(s.monitors.find((m) => m.id === id)?.website_id);
+  }
+  if (!UUID.test(id)) return null;
+  const db = getSupabase();
+  const res =
+    kind === "monitor"
+      ? await db.from("monitors").select("websites!inner(client_id)").eq("id", id).maybeSingle()
+      : await db.from(kind === "incident" ? "incidents" : "websites").select("client_id").eq("id", id).maybeSingle();
+  if (res.error) throw new Error(`Failed to load ${kind}: ${res.error.message}`);
+  const row = res.data as { client_id?: string; websites?: { client_id: string } } | null;
+  return row?.client_id ?? row?.websites?.client_id ?? null;
+}
 
 // View models ------------------------------------------------------------------
 
@@ -255,6 +372,24 @@ export const getAppData = cache(async (): Promise<AppData> => {
 });
 
 /**
+ * The same view models for one client only (its websites, monitors and
+ * incidents), for detail pages. Null if there's no such client.
+ */
+export const getClientAppData = cache(async (clientId: string): Promise<AppData | null> => {
+  await requireStaff();
+  const snapshot = await loadClientSnapshot(clientId);
+  if (!snapshot) return null;
+  return { source: getDataSource(), loadedAt: new Date().toISOString(), ...buildAppData(snapshot) };
+});
+
+/** getClientAppData for the client that owns this monitor, incident or website. */
+export const getAppDataFor = cache(async (kind: "monitor" | "incident" | "website", id: string): Promise<AppData | null> => {
+  await requireStaff();
+  const clientId = await clientIdFor(kind, id);
+  return clientId ? getClientAppData(clientId) : null;
+});
+
+/**
  * The same view models without the staff check, for scheduled jobs that are
  * already authenticated by CRON_SECRET (the weekly summary). Pages and actions
  * must use getAppData.
@@ -420,29 +555,19 @@ export async function loadReportInput(clientId: string, month: ReportMonth): Pro
   const availability = all.filter((m) => countsTowardUptime(m.monitor_type));
   const others = all.filter((m) => !countsTowardUptime(m.monitor_type));
 
-  const count = async (monitorId: string, passedOnly: boolean) => {
-    let q = db
-      .from("check_results")
-      .select("id", { count: "exact", head: true })
-      .eq("monitor_id", monitorId)
-      .gte("checked_at", start)
-      .lt("checked_at", end);
-    if (passedOnly) q = q.eq("passed", true);
-    const { count: n, error } = await q;
-    if (error) throw new Error(`Failed to count checks: ${error.message}`);
-    return n ?? 0;
-  };
-  const [uptime, checks, incidents, daily] = await Promise.all([
-    Promise.all(availability.map(async (m) => ({ monitorId: m.id, checks: await count(m.id, false), passed: await count(m.id, true) }))),
+  const [checks, incidents, allDays] = await Promise.all([
     others.length
-      ? db
-          .from("check_results")
-          .select("monitor_id, checked_at, status, passed, error_message, metadata")
-          .in("monitor_id", others.map((m) => m.id))
-          .gte("checked_at", start)
-          .lt("checked_at", end)
-          .order("checked_at", { ascending: true })
-          .limit(5000)
+      ? fetchAllRows((from, to) =>
+          db
+            .from("check_results")
+            .select("monitor_id, checked_at, status, passed, error_message, metadata")
+            .in("monitor_id", others.map((m) => m.id))
+            .gte("checked_at", start)
+            .lt("checked_at", end)
+            .order("checked_at", { ascending: true })
+            .order("id")
+            .range(from, to),
+        )
       : Promise.resolve({ data: [], error: null }),
     db
       .from("incidents")
@@ -454,6 +579,13 @@ export async function loadReportInput(clientId: string, month: ReportMonth): Pro
   ]);
   if (checks.error) throw new Error(`Failed to load checks: ${checks.error.message}`);
   if (incidents.error) throw new Error(`Failed to load incidents: ${incidents.error.message}`);
+  // The month's local days (month.start/end are local midnights, like these days).
+  const daily = new Map([...allDays].map(([id, days]) => [id, days.filter((d) => d.day.startsWith(month.key))]));
+  // Month totals from the per-day counts: no separate count queries per monitor.
+  const uptime = availability.map((m) => {
+    const days = daily.get(m.id) ?? [];
+    return { monitorId: m.id, checks: days.reduce((n, d) => n + d.checks, 0), passed: days.reduce((n, d) => n + d.passed, 0) };
+  });
   return {
     client: client.data as Client,
     input: {
@@ -471,9 +603,7 @@ export async function loadReportInput(clientId: string, month: ReportMonth): Pro
         metadata: c.metadata,
       })),
       incidents: (incidents.data as Incident[]).map(toIncident),
-      daily: [...daily].flatMap(([monitorId, days]) =>
-        days.filter((d) => d.day.startsWith(month.key)).map((d) => ({ monitorId, ...d })),
-      ),
+      daily: [...daily].flatMap(([monitorId, days]) => days.map((d) => ({ monitorId, ...d }))),
     },
   };
 }
@@ -507,10 +637,13 @@ export async function getScoreHistory(monitorId: string, days = 90): Promise<Sco
     .select("checked_at, metadata")
     .eq("monitor_id", monitorId)
     .gte("checked_at", since)
-    .order("checked_at", { ascending: true })
+    // The newest 500 (then oldest first for the chart), not the oldest 500.
+    .order("checked_at", { ascending: false })
     .limit(500);
   if (error) throw new Error(`Failed to load score history: ${error.message}`);
-  return (data as { checked_at: string; metadata: Record<string, unknown> | null }[]).flatMap((c) => toPoint(c.checked_at, c.metadata));
+  return (data as { checked_at: string; metadata: Record<string, unknown> | null }[])
+    .reverse()
+    .flatMap((c) => toPoint(c.checked_at, c.metadata));
 }
 
 /** Checks and passes per monitor per local day since `since`, counted in the database. */
@@ -523,11 +656,14 @@ async function dailyCounts(monitorIds: string[], since: Date): Promise<Map<strin
     for (const id of monitorIds) result.set(id, countByDay(checks.filter((c) => c.monitor_id === id), APP_TIMEZONE));
     return result;
   }
-  const { data, error } = await getSupabase().rpc("daily_uptime", {
-    monitor_ids: monitorIds,
-    since: since.toISOString(),
-    tz: APP_TIMEZONE,
-  });
+  // 90 days × a dozen monitors is already past the 1,000-row limit: load in pages.
+  const { data, error } = await fetchAllRows((from, to) =>
+    getSupabase()
+      .rpc("daily_uptime", { monitor_ids: monitorIds, since: since.toISOString(), tz: APP_TIMEZONE })
+      .order("monitor_id")
+      .order("day")
+      .range(from, to),
+  );
   // Before the migration runs, history just shows empty.
   if (error) {
     console.warn("[uptime history] unavailable:", error.message);

@@ -66,3 +66,16 @@ test("unsafe URLs are rejected with a reason", () => {
   assertRejected("http://2130706433/", /Private or reserved/);
   assertRejected("http://127.1/", /Private or reserved/);
 });
+
+test("more IPv6 ranges and trailing-dot hosts are refused, public addresses still pass", async () => {
+  const { isBlockedAddress: blocked, validateTargetUrl: validate } = await import("./url-safety.ts");
+  for (const ip of ["2002:a9fe:a9fe::1", "2001:0:4136:e378:8000:63bf:3fff:fdd2", "::a9fe:a9fe", "::7f00:1", "fec0::1"]) {
+    assert.equal(blocked(ip), true, ip);
+  }
+  for (const ip of ["8.8.8.8", "93.184.216.34", "1.1.1.1", "2606:4700:4700::1111", "::ffff:8.8.8.8"]) {
+    assert.equal(blocked(ip), false, ip);
+  }
+  assert.equal(blocked("::ffff:127.0.0.1"), true, "IPv4-mapped internal still blocked");
+  assert.throws(() => validate("http://localhost./"));
+  assert.throws(() => validate("http://metadata.google.internal./"));
+});

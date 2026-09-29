@@ -70,3 +70,13 @@ test("user-controlled text is escaped and the button is dropped without an app U
   assert.match(json, /A &lt;b&gt; &amp; Co/);
   assert.doesNotMatch(json, /Open incident/);
 });
+
+test("automatic resolutions quote the passes-to-resolve rule from Settings", () => {
+  const msg = buildSlackMessage({
+    ...ctx,
+    kind: "resolved",
+    passesToResolve: 3,
+    incident: { ...ctx.incident, resolved_at: "2026-09-26T14:45:00Z" },
+  });
+  assert.match(JSON.stringify(msg.blocks), /Resolved automatically after 3 successful checks/);
+});

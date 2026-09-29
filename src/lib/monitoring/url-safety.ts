@@ -46,6 +46,12 @@ for (const [network, prefix] of [
   ["64:ff9b:1::", 48],
   ["100::", 64],
   ["2001:db8::", 32],
+  // Transition ranges that can carry an internal IPv4 address: Teredo, 6to4, and
+  // the deprecated IPv4-compatible form (::a.b.c.d); plus old site-local.
+  ["2001::", 32],
+  ["2002::", 16],
+  ["::", 96],
+  ["fec0::", 10],
   ["fc00::", 7],
   ["fe80::", 10],
   ["ff00::", 8],
@@ -89,7 +95,8 @@ export function validateTargetUrl(raw: string): URL {
     throw new UnsafeUrlError(`Port ${url.port} is not allowed`);
   }
   // URL normalizes IPv4 shorthand (e.g. http://2130706433) and brackets IPv6 hosts.
-  const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  // "localhost." and "metadata.internal." are the same hosts as without the dot.
+  const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase().replace(/\.$/, "");
   if (isIP(host)) {
     if (isBlockedAddress(host)) throw new UnsafeUrlError("Private or reserved IP addresses are not allowed");
   } else if (isInternalHostname(host)) {
