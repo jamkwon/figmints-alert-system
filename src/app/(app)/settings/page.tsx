@@ -153,7 +153,7 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
           </Row>
           <Row label="Default HTTP success">Status 200–399 (unless a monitor sets an expected status)</Row>
           <Row label="Display timezone">{APP_TIMEZONE}</Row>
-          <Row label="Check intervals">5 min, 15 min, 30 min, 1 hour, 6 hours, daily</Row>
+          <Row label="Check intervals">5 min, 15 min, 30 min, 1 hour, 6 hours, daily, weekly, monthly (every 30 days)</Row>
           <Row label="Tracking tags">
             Looks for Google Tag Manager, GA4, Google Ads, Meta Pixel, LinkedIn Insight and HubSpot in the page&apos;s HTML;
             fails when an expected tag is missing. Tags loaded inside GTM aren&apos;t visible without a browser.

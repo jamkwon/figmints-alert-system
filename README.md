@@ -22,6 +22,7 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 - **Phase 7, Stage B (WordPress plugin): done.** An optional read-only plugin lets WordPress Health checks see every plugin and theme with its available update (premium included), exact WordPress/PHP versions, debug mode, WP-Cron and **fatal PHP errors**. See **WordPress plugin**.
 - **Search visibility and domain expiry: done.** A *Search Visibility* monitor fails if a production site tells search engines not to index it or robots.txt blocks it; a *Domain Expiry* monitor warns before the domain registration runs out. See **Search visibility** and **Domain expiry**.
 - **Page speed: done.** A *Page Speed* monitor runs Google PageSpeed Insights (mobile) daily and warns when the performance score drops below a minimum or real visitors' Core Web Vitals fail. See **Page speed**.
+- **Monthly client report: done.** A printable report per client and month (uptime, incidents, WordPress work done, page speed, security). See **Monthly report**.
 
 Running checks and updating incidents require Supabase. On sample data those controls are disabled.
 
@@ -103,6 +104,7 @@ The schema lives in `supabase/migrations/`. Sample data lives in `supabase/seed.
    - `20261002000000_app_settings.sql` (editable monitoring rules)
    - `20261003000000_seo_domain.sql` (Search Visibility and Domain Expiry monitors)
    - `20261004000000_page_speed.sql` (Page Speed monitors; minimum score setting)
+   - `20261005000000_weekly_monthly_intervals.sql` (Weekly and Monthly check intervals)
 3. (Optional) Run `supabase/seed.sql` to load the 6 sample clients. You can re-run it safely; it replaces the earlier sample rows.
 4. Copy the project URL and the secret key into `.env.local`, then restart `npm run dev`.
 
@@ -175,6 +177,7 @@ src/
       visibility.ts     noindex, robots.txt (Google's rules) and canonical checks
       domain.ts         Domain expiry from the registry's RDAP service
       pagespeed.ts      Google PageSpeed Insights: score, lab and real-user metrics, rules
+    report.ts           Monthly client report: months, uptime, incidents, WordPress work done
       url-safety.ts     SSRF protection
       incident-engine.ts Pure rules: when to open, update or resolve an incident
       record.ts         Runs a check, saves the result, applies incident rules
@@ -491,7 +494,7 @@ One scheduled worker checks every monitor that's due. There are no per-website c
 4. After 20 s the run stops starting new checks (running ones finish; a WordPress Health check can take up to ~35 s), and the monitors it didn't get to are released for the next run. With more than 20 due monitors, the backlog drains over the following runs.
 5. **Housekeeping:** every run reopens snoozes that have expired. Once an hour, it deletes check results older than **90 days**.
 
-**Intervals:** 5 min, 15 min, 30 min, 1 hour, 6 hours, or daily (enforced by the database). A new monitor with no *next check* is due right away.
+**Intervals:** 5 min, 15 min, 30 min, 1 hour, 6 hours, daily, weekly, or monthly (every 30 days), enforced by the database (migration `20261005000000_weekly_monthly_intervals.sql` added the last two). Weekly or monthly suits slow-changing checks like domain expiry, page speed or link scans. A new monitor with no *next check* is due right away. Check history is kept 90 days, so a monthly monitor keeps its last three results.
 
 **Why Supabase and not Vercel Cron?** On Vercel's Hobby plan, cron jobs can run only once a day, and a more frequent schedule makes deployments fail. On Pro you could instead add a `crons` entry to `vercel.json` pointing at `/api/cron/run-checks` (Vercel sends `CRON_SECRET` automatically).
 
@@ -524,6 +527,18 @@ Runs never overlap on the same monitor (see *claims* above), so this is safe. **
 ```bash
 curl -X POST http://localhost:3000/api/cron/run-checks -H "Authorization: Bearer $CRON_SECRET"
 ```
+
+## Monthly report
+
+Each client has a **Monthly report** (client page → **Monthly report**): one printable page summarizing a calendar month (`APP_TIMEZONE`) to send to the client or use in account reviews. **Print / Save as PDF** hides the app around it.
+
+- **Overview:** uptime (page-load checks), incidents opened, average time to resolve, and WordPress updates made.
+- **Uptime by website** and **incidents** (what happened, severity, when, how long it took to fix).
+- **WordPress maintenance**, per site: core and plugin/theme updates made during the month, backups, PHP errors, and updates still pending. Updates are worked out by comparing versions at the start and end of the month, so nobody has to log them. With the Website Watch plugin every update is listed (compared from the first check that had its full list); without it, only what's visible from outside.
+- **Page speed:** latest score and the month's range and average.
+- **Security and visibility:** SSL certificate and domain renewal dates, and whether search engines could index the site all month.
+
+Sections without monitors are left out. **Months:** the current one ("so far") and the two before it; check history is kept 90 days. The page opens on last month, the one to send at the start of a month. It's for staff only (it needs sign-in); clients get the PDF.
 
 ## Settings
 

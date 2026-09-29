@@ -50,6 +50,8 @@ export const ENVIRONMENT_LABELS: Record<Environment, string> = {
 };
 
 export function formatInterval(minutes: number): string {
+  if (minutes === WEEK_MINUTES) return "Weekly";
+  if (minutes === MONTH_MINUTES) return "Monthly";
   if (minutes % 1440 === 0) return minutes === 1440 ? "Daily" : `Every ${minutes / 1440} days`;
   if (minutes % 60 === 0) return minutes === 60 ? "Hourly" : `Every ${minutes / 60} hours`;
   return `Every ${minutes} min`;
@@ -68,7 +70,10 @@ export function durationLabel(hours: number): string {
 }
 
 // Allowed values for forms. Kept here (no server imports) so client components can use them.
-export const INTERVALS = [5, 15, 30, 60, 360, 1440] as const;
+const WEEK_MINUTES = 7 * 1440;
+/** "Monthly" is every 30 days. */
+const MONTH_MINUTES = 30 * 1440;
+export const INTERVALS = [5, 15, 30, 60, 360, 1440, WEEK_MINUTES, MONTH_MINUTES] as const;
 export const MONITOR_TYPES: readonly MonitorType[] = [
   "http_status",
   "expected_content",

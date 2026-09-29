@@ -89,6 +89,21 @@ body {
   color: var(--color-fig-ink);
 }
 
+/* Printing (the monthly report): white page, keep colors, don't split panels. */
+@media print {
+  @page {
+    margin: 14mm 12mm;
+  }
+  body {
+    background: white;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  section {
+    break-inside: avoid;
+  }
+}
+
 /* Tailwind 4 gives buttons the default arrow cursor; use a pointer for anything clickable. */
 @layer base {
   button:not(:disabled),

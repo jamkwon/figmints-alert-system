@@ -21,7 +21,7 @@ export function AccountBar({ user }: { user: StaffUser | null }) {
   // Sample-data mode has no sign-in; the sample-data banner already says so.
   if (!user) return null;
   return (
-    <div className="flex h-14 shrink-0 items-center justify-end gap-4 border-b border-slate-200 bg-white px-8">
+    <div className="flex h-14 shrink-0 items-center justify-end gap-4 border-b border-slate-200 bg-white px-8 print:hidden">
       <Link
         href="/profile"
         title="Your profile"
