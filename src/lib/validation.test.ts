@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { formatInterval } from "./labels.ts";
 import assert from "node:assert/strict";
 import {
   ValidationError,
@@ -69,4 +70,14 @@ test("expected tags keep known keys and need at least one", async () => {
   assert.deepEqual(parseExpectedTags(["gtm", "ga4", "gtm", "tiktok"]), ["gtm", "ga4"]);
   rejects(() => parseExpectedTags([]), /at least one tag/);
   rejects(() => parseExpectedTags(["tiktok"]), /at least one tag/);
+});
+
+test("weekly and monthly check intervals are accepted and named", () => {
+  assert.equal(parseInterval("10080"), 10080);
+  assert.equal(parseInterval("43200"), 43200);
+  rejects(() => parseInterval("20160"), /interval/);
+  assert.equal(formatInterval(10080), "Weekly");
+  assert.equal(formatInterval(43200), "Monthly");
+  assert.equal(formatInterval(1440), "Daily");
+  assert.equal(formatInterval(360), "Every 6 hours");
 });
