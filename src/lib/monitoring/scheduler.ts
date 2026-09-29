@@ -6,13 +6,14 @@ import { maybeSendWeeklySummary } from "@/lib/notify/weekly-send";
 import { getSupabase } from "@/lib/supabase/server";
 import type { Monitor } from "@/lib/types";
 
-// Sized so one run finishes well inside a 60 s function limit:
-// 20 monitors, 5 at a time, each check capped at 15 s.
+// Sized so one run finishes inside a 60 s function limit: 20 monitors, 5 at a
+// time. Most checks are capped at 15 s; a WordPress Health check can take up to
+// ~35 s (the page, then the site plugin's report, which gets 20 s).
 export const MAX_MONITORS_PER_RUN = 20;
 const CONCURRENCY = 5;
-// Stop starting new checks after this; unstarted monitors are retried next run
-// once their claim lease (5 min) expires.
-const TIME_BUDGET_MS = 40_000;
+// Stop starting new checks after this (20 s + a 35 s check still ends before
+// 60 s). Unstarted monitors are released for the next run.
+const TIME_BUDGET_MS = 20_000;
 // Check results older than this are deleted (once an hour).
 export const RETENTION_DAYS = 90;
 
@@ -67,10 +68,13 @@ export async function runDueChecks(): Promise<SchedulerRunSummary> {
   const queue = [...((data as Monitor[] | null) ?? [])];
   summary.claimed = queue.length;
 
+  const deferredIds: string[] = [];
+
   async function worker() {
     while (queue.length > 0) {
       if (Date.now() - started > TIME_BUDGET_MS) {
         summary.deferred += queue.length;
+        deferredIds.push(...queue.map((m) => m.id));
         queue.length = 0;
         return;
       }
@@ -89,8 +93,18 @@ export async function runDueChecks(): Promise<SchedulerRunSummary> {
   }
 
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
+  if (deferredIds.length > 0) await releaseClaims(deferredIds);
   summary.durationMs = Date.now() - started;
   return summary;
+}
+
+/**
+ * Claiming pushes next_check_at 5 minutes out; monitors this run didn't get to
+ * are made due again so the next run (a minute later) checks them.
+ */
+async function releaseClaims(ids: string[]): Promise<void> {
+  const { error } = await getSupabase().from("monitors").update({ next_check_at: new Date().toISOString() }).in("id", ids);
+  if (error) console.error("[scheduler] could not release deferred monitors:", error.message);
 }
 
 /** Snoozes that have run out go back to Open (and back onto the dashboard). */
