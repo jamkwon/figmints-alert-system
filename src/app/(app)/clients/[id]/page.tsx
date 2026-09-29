@@ -71,6 +71,7 @@ export default async function ClientDetailPage({ params }: PageProps<"/clients/[
         }
         actions={
           <>
+            <LinkButton href={`/clients/${client.id}/report`}>Monthly report</LinkButton>
             <LinkButton href={`/clients/${client.id}/edit`}>Edit client</LinkButton>
             <LinkButton href={`/clients/${client.id}/websites/new`}>Add website</LinkButton>
             <LinkButton href={`/clients/${client.id}/monitors/new`} primary>
