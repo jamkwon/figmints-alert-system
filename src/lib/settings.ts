@@ -22,6 +22,8 @@ export interface AppSettings {
   /** Page Speed: Warning below this Lighthouse performance score (0 turns it off). */
   minPerformanceScore: number;
   summaryEnabled: boolean;
+  /** Post last month's client reports to Slack on the 1st (at summaryHour). */
+  monthlyReportsEnabled: boolean;
   /** 1 = Monday … 7 = Sunday. */
   summaryWeekday: number;
   /** Hour of the day (0–23) in APP_TIMEZONE. */
@@ -39,6 +41,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   warnOnUpdates: true,
   minPerformanceScore: 50,
   summaryEnabled: true,
+  monthlyReportsEnabled: true,
   summaryWeekday: 1,
   summaryHour: 9,
 };
@@ -74,6 +77,7 @@ export const SETTING_FIELDS: Record<keyof AppSettings, string> = {
   warnOnUpdates: "warn_on_updates",
   minPerformanceScore: "min_performance_score",
   summaryEnabled: "summary_enabled",
+  monthlyReportsEnabled: "monthly_reports_enabled",
   summaryWeekday: "summary_weekday",
   summaryHour: "summary_hour",
 };
@@ -96,7 +100,7 @@ export function settingsFromRow(row: Record<string, unknown> | null | undefined)
   const php = row.min_php_version;
   if (php === null) s.minPhpVersion = null;
   else if (typeof php === "string" && PHP_VERSION.test(php)) s.minPhpVersion = php;
-  for (const key of ["warnOnUpdates", "summaryEnabled"] as const) {
+  for (const key of ["warnOnUpdates", "summaryEnabled", "monthlyReportsEnabled"] as const) {
     const value = row[SETTING_FIELDS[key]];
     if (typeof value === "boolean") s[key] = value;
   }
@@ -154,5 +158,6 @@ export function parseSettingsForm(get: (name: string) => unknown): SettingsFormR
   };
   s.warnOnUpdates = on(SETTING_FIELDS.warnOnUpdates);
   s.summaryEnabled = on(SETTING_FIELDS.summaryEnabled);
+  s.monthlyReportsEnabled = on(SETTING_FIELDS.monthlyReportsEnabled);
   return { ok: true, settings: s };
 }

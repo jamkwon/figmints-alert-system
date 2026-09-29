@@ -3,6 +3,7 @@ import { SYSTEM_ACTOR, logIncidentEvent } from "@/lib/monitoring/incident-events
 import { runAndRecordCheck } from "@/lib/monitoring/record";
 import { notifyIncidentChange } from "@/lib/notify/send";
 import { maybeSendWeeklySummary } from "@/lib/notify/weekly-send";
+import { maybeSendMonthlyReports } from "@/lib/notify/monthly-send";
 import { getSupabase } from "@/lib/supabase/server";
 import type { Monitor } from "@/lib/types";
 
@@ -35,6 +36,8 @@ export interface SchedulerRunSummary {
   oldChecksDeleted: number | null;
   /** "sent", "not_due", or what went wrong. */
   weeklySummary: string | null;
+  /** Monthly client reports in Slack on the 1st: "sent", "not_due", "off", or what went wrong. */
+  monthlyReports: string | null;
   errors: { monitorId: string; message: string }[];
 }
 
@@ -54,6 +57,7 @@ export async function runDueChecks(): Promise<SchedulerRunSummary> {
     snoozesReopened: 0,
     oldChecksDeleted: null,
     weeklySummary: null,
+    monthlyReports: null,
     errors: [],
   };
 
@@ -64,6 +68,11 @@ export async function runDueChecks(): Promise<SchedulerRunSummary> {
     summary.weeklySummary = await maybeSendWeeklySummary(new Date(started));
   } catch (err) {
     summary.weeklySummary = `failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+  try {
+    summary.monthlyReports = await maybeSendMonthlyReports(new Date(started));
+  } catch (err) {
+    summary.monthlyReports = `failed: ${err instanceof Error ? err.message : String(err)}`;
   }
 
   const { data, error } = await getSupabase().rpc("claim_due_monitors", { max_count: MAX_MONITORS_PER_RUN });

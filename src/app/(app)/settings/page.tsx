@@ -214,6 +214,25 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
               />
             </div>
           </Row>
+          <Row label="Monthly reports">
+            {rules.monthlyReportsEnabled ? (
+              <>
+                On the 1st at {rules.summaryHour}:00 ({APP_TIMEZONE}): one message linking each client&apos;s report for
+                the month that just ended, with its uptime, incidents and WordPress updates.
+              </>
+            ) : (
+              <>Off</>
+            )}{" "}
+            <span className="text-slate-500">On/off: Monitoring rules above.</span>
+            <div className="mt-2">
+              <TestAlertButton
+                kind="monthly"
+                disabledReason={
+                  source === "sample" ? "Connect Supabase first" : !slackConfigured ? "Set SLACK_WEBHOOK_URL first" : undefined
+                }
+              />
+            </div>
+          </Row>
           <Row label="Test">
             <TestAlertButton
               disabledReason={

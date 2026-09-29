@@ -117,11 +117,16 @@ export function SettingsForm({ settings, disabledReason }: { settings: AppSettin
           </Field>
         </Group>
 
-        <Group title="Weekly summary">
-          <div className="sm:col-span-2">
+        <Group title="Slack summaries">
+          <div className="space-y-2 sm:col-span-2">
             <Checkbox name={F.summaryEnabled} label="Post a weekly summary to Slack" defaultChecked={settings.summaryEnabled} />
+            <Checkbox
+              name={F.monthlyReportsEnabled}
+              label="Post last month's client reports to Slack on the 1st, at the time below"
+              defaultChecked={settings.monthlyReportsEnabled}
+            />
           </div>
-          <Field label="Day" error={err(F.summaryWeekday)}>
+          <Field label="Weekly summary day" error={err(F.summaryWeekday)}>
             <select name={F.summaryWeekday} defaultValue={settings.summaryWeekday} className={inputClass}>
               {WEEKDAY_NAMES.map((day, i) => (
                 <option key={day} value={i + 1}>

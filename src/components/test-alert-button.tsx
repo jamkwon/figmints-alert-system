@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { sendTestAlertAction, sendWeeklySummaryAction, type RunCheckResult } from "@/app/actions";
+import { sendMonthlyReportsAction, sendTestAlertAction, sendWeeklySummaryAction, type RunCheckResult } from "@/app/actions";
 
 const ACTIONS = {
   test: { run: sendTestAlertAction, label: "Send test alert" },
   summary: { run: sendWeeklySummaryAction, label: "Send summary now" },
+  monthly: { run: sendMonthlyReportsAction, label: "Post last month's reports now" },
 };
 
 export function TestAlertButton({
