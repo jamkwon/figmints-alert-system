@@ -240,3 +240,33 @@ export function domainExpiryInfo(metadata: Record<string, unknown> | null | unde
     statuses: Array.isArray(metadata.statuses) ? (metadata.statuses as string[]) : [],
   };
 }
+
+export interface PageSpeedInfo {
+  score: number | null;
+  lab: { fcpMs: number | null; lcpMs: number | null; tbtMs: number | null; cls: number | null; speedIndexMs: number | null };
+  field: {
+    source: "page" | "origin";
+    lcp: { p75: number; category: string | null } | null;
+    inp: { p75: number; category: string | null } | null;
+    cls: { p75: number; category: string | null } | null;
+  } | null;
+  opportunities: { title: string; savingsMs: number }[];
+  finalUrl: string | null;
+}
+
+/** Results of a page speed check from its latest check metadata. */
+export function pageSpeedInfo(metadata: Record<string, unknown> | null | undefined): PageSpeedInfo | null {
+  if (!metadata || !("score" in metadata) || typeof metadata.lab !== "object" || metadata.lab === null) return null;
+  return {
+    score: typeof metadata.score === "number" ? metadata.score : null,
+    lab: metadata.lab as PageSpeedInfo["lab"],
+    field: (metadata.field as PageSpeedInfo["field"]) ?? null,
+    opportunities: Array.isArray(metadata.opportunities) ? (metadata.opportunities as PageSpeedInfo["opportunities"]) : [],
+    finalUrl: typeof metadata.final_url === "string" ? metadata.final_url : null,
+  };
+}
+
+/** "2.4 s" from milliseconds. */
+export function formatSeconds(ms: number | null | undefined): string {
+  return typeof ms === "number" ? `${(ms / 1000).toFixed(1)} s` : "–";
+}

@@ -379,6 +379,33 @@ export function buildSampleData(now: Date = new Date()): {
     }
   }
 
+  // Page speed: a slow homepage on mobile (a Warning; never Critical).
+  monitor(22, 3, "Page Speed (Homepage)", "page_speed", "https://bluefinchbakery.example/",
+    { interval: 1440, severity: "warning", passingLatestMin: 2600,
+      failures: fails("warning", null, "Performance score 38/100 on mobile (below 50, LCP 6.1 s); Core Web Vitals failing for real visitors (whole site): LCP 3.4 s", [[500, 21400]]) });
+  for (const check of checkResults) {
+    if (check.monitor_id !== mid(22)) continue;
+    const slow = !check.passed;
+    check.metadata = {
+      final_url: "https://bluefinchbakery.example/",
+      strategy: "mobile",
+      score: slow ? 38 : 71,
+      lab: { fcpMs: slow ? 2900 : 1700, lcpMs: slow ? 6100 : 2900, tbtMs: slow ? 840 : 210, cls: 0.04, speedIndexMs: slow ? 5200 : 3100 },
+      field: {
+        source: "origin",
+        lcp: { p75: 3400, category: "AVERAGE" },
+        inp: { p75: 180, category: "FAST" },
+        cls: { p75: 0.03, category: "FAST" },
+      },
+      opportunities: [
+        { title: "Properly size images", savingsMs: 1850 },
+        { title: "Eliminate render-blocking resources", savingsMs: 900 },
+        { title: "Reduce unused JavaScript", savingsMs: 450 },
+      ],
+      lighthouse_version: "12.8.2",
+    };
+  }
+
   const summaries = monitors.map((m) => summarizeChecks(m.id, checkResults));
 
   function incident(

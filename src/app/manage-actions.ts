@@ -246,6 +246,30 @@ async function addDomainMonitor(websiteId: string, websiteUrl: string) {
   fail("add domain check", error);
 }
 
+/** Adds a daily Google PageSpeed test of the homepage, unless the website already has one. */
+async function addPageSpeedMonitor(websiteId: string, websiteUrl: string) {
+  const db = getSupabase();
+  const existing = await db
+    .from("monitors")
+    .select("id")
+    .eq("website_id", websiteId)
+    .eq("monitor_type", "page_speed")
+    .limit(1);
+  fail("check page speed monitors", existing.error);
+  if (existing.data?.length) return;
+  const { error } = await db.from("monitors").insert({
+    website_id: websiteId,
+    name: "Page Speed (Homepage)",
+    monitor_type: "page_speed",
+    target_url: new URL(websiteUrl).origin + "/",
+    interval_minutes: 1440,
+    // Page speed only warns; severity applies to nothing, so keep it low.
+    severity_on_failure: "warning",
+    next_check_at: null,
+  });
+  fail("add page speed check", error);
+}
+
 // Clients ---------------------------------------------------------------------
 
 export async function saveClientAction(_prev: FormState, formData: FormData): Promise<FormState> {
@@ -288,6 +312,7 @@ export async function saveClientAction(_prev: FormState, formData: FormData): Pr
         await addVisibilityMonitor(website.data!.id, primaryWebsite, "production");
       }
       if (parseCheckbox(formData.get("domain"))) await addDomainMonitor(website.data!.id, primaryWebsite);
+      if (parseCheckbox(formData.get("speed"))) await addPageSpeedMonitor(website.data!.id, primaryWebsite);
     }
     return `/clients/${client.data!.id}`;
   });
@@ -373,7 +398,8 @@ export async function addMonitorsAction(_prev: FormState, formData: FormData): P
     const wordpress = parseCheckbox(formData.get("wordpress"));
     const visibility = parseCheckbox(formData.get("visibility"));
     const domain = parseCheckbox(formData.get("domain"));
-    if (lines.length === 0 && !ssl && !linkScan && !tags && !wordpress && !visibility && !domain) {
+    const speed = parseCheckbox(formData.get("speed"));
+    if (lines.length === 0 && !ssl && !linkScan && !tags && !wordpress && !visibility && !domain && !speed) {
       throw new ValidationError("pages", "Add at least one page, or tick one of the extra checks.");
     }
     const severity = parseSeverity(formData.get("severity_on_failure"));
@@ -384,6 +410,7 @@ export async function addMonitorsAction(_prev: FormState, formData: FormData): P
     if (wordpress) await addWordPressMonitor(website.id, website.url);
     if (visibility) await addVisibilityMonitor(website.id, website.url, website.environment);
     if (domain) await addDomainMonitor(website.id, website.url);
+    if (speed) await addPageSpeedMonitor(website.id, website.url);
     return `/clients/${website.client_id}`;
   });
 }
@@ -398,7 +425,8 @@ function parseMonitorFields(formData: FormData, websiteUrl: string) {
     monitorType === "tracking_tags" ||
     monitorType === "wordpress_health" ||
     monitorType === "search_visibility" ||
-    monitorType === "domain_expiry";
+    monitorType === "domain_expiry" ||
+    monitorType === "page_speed";
   const expectedTags = monitorType === "tracking_tags" ? parseExpectedTags(formData.getAll("expected_tags")) : [];
   const expectedText = ownRules ? null : parseExpectedText(formData.get("expected_text"));
   if (monitorType === "expected_content" && !expectedText) {

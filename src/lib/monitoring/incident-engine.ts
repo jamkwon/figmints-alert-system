@@ -46,6 +46,7 @@ export function titleForCheck(check: Check, monitorName: string, monitorType?: M
       ? `Search visibility issue on ${monitorName}`
       : `Search engines blocked on ${monitorName}`;
   }
+  if (monitorType === "page_speed") return `Page speed below target on ${monitorName}`;
   if (monitorType === "domain_expiry") {
     return check.status === "warning" ? `Domain for ${monitorName} expires soon` : `Domain problem on ${monitorName}`;
   }

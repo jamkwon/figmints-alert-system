@@ -15,6 +15,8 @@ import {
   wordpressInfo,
   visibilityInfo,
   domainExpiryInfo,
+  pageSpeedInfo,
+  formatSeconds,
   formatDate,
   formatDateTime,
   formatUptime,
@@ -73,6 +75,8 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
   const isWordPress = monitor.monitor_type === "wordpress_health";
   const isVisibility = monitor.monitor_type === "search_visibility";
   const isDomain = monitor.monitor_type === "domain_expiry";
+  const isSpeed = monitor.monitor_type === "page_speed";
+  const speed = isSpeed ? pageSpeedInfo(summary?.last_metadata) : null;
   const vis = isVisibility ? visibilityInfo(summary?.last_metadata) : null;
   const dom = isDomain ? domainExpiryInfo(summary?.last_metadata) : null;
   const wp = isWordPress ? wordpressInfo(summary?.last_metadata) : null;
@@ -181,7 +185,92 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
         </Panel>
 
         <div className="space-y-6">
-          {isVisibility ? (
+          {isSpeed ? (
+            <Panel
+              title="Page speed (mobile)"
+              aside={
+                <a
+                  href={`https://pagespeed.web.dev/analysis?url=${encodeURIComponent(monitor.target_url)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-fig-plum hover:underline"
+                >
+                  Full report
+                </a>
+              }
+            >
+              {!speed ? (
+                <p className="px-4 py-4 text-sm text-slate-500">{summary?.last_error_message ?? "Not checked yet."}</p>
+              ) : (
+                <>
+                  <div className="flex items-baseline gap-2 px-4 pt-4">
+                    <span
+                      className={`font-display text-3xl font-bold ${
+                        speed.score === null
+                          ? "text-slate-400"
+                          : speed.score >= 90
+                            ? "text-fig-teal"
+                            : speed.score >= rules.minPerformanceScore
+                              ? "text-amber-700"
+                              : "text-red-700"
+                      }`}
+                    >
+                      {speed.score ?? "–"}
+                    </span>
+                    <span className="text-sm text-slate-500">/ 100 performance score</span>
+                  </div>
+                  <dl className="mt-2">
+                    <ConfigRow label="Largest paint (LCP)">{formatSeconds(speed.lab.lcpMs)}</ConfigRow>
+                    <ConfigRow label="First paint (FCP)">{formatSeconds(speed.lab.fcpMs)}</ConfigRow>
+                    <ConfigRow label="Blocking time (TBT)">
+                      {speed.lab.tbtMs !== null ? `${Math.round(speed.lab.tbtMs)} ms` : "–"}
+                    </ConfigRow>
+                    <ConfigRow label="Layout shift (CLS)">{speed.lab.cls !== null ? speed.lab.cls.toFixed(3) : "–"}</ConfigRow>
+                    <ConfigRow label="Real visitors">
+                      {!speed.field ? (
+                        <span className="text-slate-500">Not enough Chrome traffic for Google&apos;s data</span>
+                      ) : (
+                        <>
+                          {(
+                            [
+                              ["LCP", speed.field.lcp, (v: number) => formatSeconds(v)],
+                              ["INP", speed.field.inp, (v: number) => `${Math.round(v)} ms`],
+                              ["CLS", speed.field.cls, (v: number) => v.toFixed(2)],
+                            ] as const
+                          ).map(([label, metric, show]) =>
+                            metric ? (
+                              <span key={label} className="block">
+                                {label} {show(metric.p75)}{" "}
+                                <span className={metric.category === "FAST" ? "text-fig-teal" : "text-amber-700"}>
+                                  ({metric.category === "FAST" ? "good" : metric.category === "SLOW" ? "poor" : "needs work"})
+                                </span>
+                              </span>
+                            ) : null,
+                          )}
+                          <span className="block text-xs text-slate-500">
+                            75th percentile, last 28 days{speed.field.source === "origin" ? ", whole site" : ""}
+                          </span>
+                        </>
+                      )}
+                    </ConfigRow>
+                  </dl>
+                  {speed.opportunities.length > 0 && (
+                    <div className="border-t border-slate-100 px-4 py-3">
+                      <div className="mb-1 text-xs font-medium tracking-wide text-slate-500 uppercase">Biggest wins</div>
+                      <ul className="space-y-0.5 text-xs">
+                        {speed.opportunities.map((o) => (
+                          <li key={o.title} className="flex justify-between gap-2">
+                            <span className="text-fig-ink">{o.title}</span>
+                            <span className="shrink-0 text-slate-500">~{formatSeconds(o.savingsMs)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </>
+              )}
+            </Panel>
+          ) : isVisibility ? (
             <Panel title="Search visibility">
               {!vis ? (
                 <p className="px-4 py-4 text-sm text-slate-500">Not checked yet.</p>
@@ -496,7 +585,7 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
               <ConfigRow label="Website">
                 {displayUrl(website.url)} · {ENVIRONMENT_LABELS[website.environment]}
               </ConfigRow>
-              {!isSsl && !isLinkScan && !isTracking && !isWordPress && !isVisibility && !isDomain && (
+              {!isSsl && !isLinkScan && !isTracking && !isWordPress && !isVisibility && !isDomain && !isSpeed && (
                 <>
                   <ConfigRow label="Expected status">
                     {monitor.expected_status_code ?? <span className="text-slate-500">200–399 (default)</span>}

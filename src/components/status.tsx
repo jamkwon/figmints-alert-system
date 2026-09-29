@@ -83,7 +83,9 @@ export function CheckStatusBadge({ status, monitorType }: { status: CheckStatus;
             ? "Expiring soon"
             : monitorType === "search_visibility"
               ? "Needs a look"
-              : label;
+              : monitorType === "page_speed"
+                ? "Slow"
+                : label;
   if (status === "failed" && monitorType === "tracking_tags") return <HealthBadge health={health} label="Tags missing" />;
   if (status === "failed" && monitorType === "search_visibility") return <HealthBadge health={health} label="Hidden from search" />;
   return <HealthBadge health={health} label={status === "warning" ? warningLabel : label} />;

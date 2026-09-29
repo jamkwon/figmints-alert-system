@@ -107,6 +107,16 @@ export function SettingsForm({ settings, disabledReason }: { settings: AppSettin
           </div>
         </Group>
 
+        <Group title="Page speed">
+          <Field
+            label="Warn below this performance score"
+            hint="Google PageSpeed's 0–100 score on mobile. 0 turns the score warning off (failing Core Web Vitals still warn)."
+            error={err(F.minPerformanceScore)}
+          >
+            <NumberInput name={F.minPerformanceScore} value={settings.minPerformanceScore} limit={L.minPerformanceScore} />
+          </Field>
+        </Group>
+
         <Group title="Weekly summary">
           <div className="sm:col-span-2">
             <Checkbox name={F.summaryEnabled} label="Post a weekly summary to Slack" defaultChecked={settings.summaryEnabled} />

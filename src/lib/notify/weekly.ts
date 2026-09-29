@@ -126,6 +126,7 @@ const OWN_SECTION: MonitorType[] = [
   "tracking_tags",
   "search_visibility",
   "domain_expiry",
+  "page_speed",
 ];
 
 /** "Akismet Anti-spam: Spam Protection" → "Akismet Anti-spam". */
@@ -177,6 +178,7 @@ export function buildWeeklySummary({ monitors, incidents, now, appUrl }: Summary
   const sslLines: { line: string; days: number }[] = [];
   const linkLines: string[] = [];
   const visibilityLines: string[] = [];
+  const speedLines: string[] = [];
   const domainLines: { line: string; days: number }[] = [];
   const tagLines: string[] = [];
 
@@ -224,6 +226,8 @@ export function buildWeeklySummary({ monitors, incidents, now, appUrl }: Summary
         const when = cert.daysLeft < 0 ? "*expired*" : `expires ${formatDate(cert.validTo)} (${plural(cert.daysLeft, "day")})`;
         sslLines.push({ line: `${site(m)}: ${when}`, days: cert.daysLeft });
       }
+    } else if (m.monitorType === "page_speed") {
+      if (m.lastStatus === "warning" && m.lastErrorMessage) speedLines.push(`${site(m)}: ${esc(m.lastErrorMessage)}`);
     } else if (m.monitorType === "search_visibility") {
       if (m.lastStatus && m.lastStatus !== "passed" && m.lastErrorMessage) {
         visibilityLines.push(`${m.lastStatus === "failed" ? ":red_circle: " : ""}${site(m)}: ${esc(m.lastErrorMessage)}`);
@@ -266,6 +270,7 @@ export function buildWeeklySummary({ monitors, incidents, now, appUrl }: Summary
       ":wrench: *WordPress updates*",
       wordpressLines.sort((a, b) => b.weight - a.weight).map((l) => l.line),
     ),
+    section(":snail: *Page speed*", speedLines),
     section(":link: *Broken links*", linkLines),
     section(":label: *Missing tracking tags*", tagLines),
   ].filter(Boolean);

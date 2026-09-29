@@ -21,6 +21,7 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 - **Phase 7: import from WP Engine done.** **Clients → Import from WP Engine** adds production sites from WP Engine as clients, with uptime, SSL and WordPress checks. See **Importing sites from WP Engine**.
 - **Phase 7, Stage B (WordPress plugin): done.** An optional read-only plugin lets WordPress Health checks see every plugin and theme with its available update (premium included), exact WordPress/PHP versions, debug mode, WP-Cron and **fatal PHP errors**. See **WordPress plugin**.
 - **Search visibility and domain expiry: done.** A *Search Visibility* monitor fails if a production site tells search engines not to index it or robots.txt blocks it; a *Domain Expiry* monitor warns before the domain registration runs out. See **Search visibility** and **Domain expiry**.
+- **Page speed: done.** A *Page Speed* monitor runs Google PageSpeed Insights (mobile) daily and warns when the performance score drops below a minimum or real visitors' Core Web Vitals fail. See **Page speed**.
 
 Running checks and updating incidents require Supabase. On sample data those controls are disabled.
 
@@ -59,6 +60,7 @@ Copy `.env.example` to `.env.local`:
 | `APP_URL` | No | Public app address for "Open incident" links in alerts. On Vercel the production domain is detected automatically. |
 | `WPENGINE_API_USER` / `WPENGINE_API_PASSWORD` | For WP Engine data | API credentials from my.wpengine.com → API Access. **Secret.** Used read-only (installs and backups). |
 | `WEBSITE_WATCH_PLUGIN_KEY` | For the WordPress plugin | Private key (64 hex characters) that signs requests to the site plugin. **Secret.** Changing it means re-installing the plugin. `WEBSITE_WATCH_PLUGIN_TOKEN` (its earlier name) also works. |
+| `PAGESPEED_API_KEY` | For Page Speed monitors | Google API key for PageSpeed Insights. See **Page speed**. Without it, those checks only say it's missing. |
 | `APP_TIMEZONE` | No | Timezone for displayed times. Default `America/New_York`. |
 
 Both Supabase variables must be set for the app to use Supabase. Settings shows which data source is active and which variable names it found.
@@ -100,6 +102,7 @@ The schema lives in `supabase/migrations/`. Sample data lives in `supabase/seed.
    - `20261001000000_weekly_summary.sql` (Phase 9, weekly summary)
    - `20261002000000_app_settings.sql` (editable monitoring rules)
    - `20261003000000_seo_domain.sql` (Search Visibility and Domain Expiry monitors)
+   - `20261004000000_page_speed.sql` (Page Speed monitors; minimum score setting)
 3. (Optional) Run `supabase/seed.sql` to load the 6 sample clients. You can re-run it safely; it replaces the earlier sample rows.
 4. Copy the project URL and the secret key into `.env.local`, then restart `npm run dev`.
 
@@ -171,6 +174,7 @@ src/
       wp-plugin.ts      The Website Watch Health WordPress plugin (PHP source, request signing)
       visibility.ts     noindex, robots.txt (Google's rules) and canonical checks
       domain.ts         Domain expiry from the registry's RDAP service
+      pagespeed.ts      Google PageSpeed Insights: score, lab and real-user metrics, rules
       url-safety.ts     SSRF protection
       incident-engine.ts Pure rules: when to open, update or resolve an incident
       record.ts         Runs a check, saves the result, applies incident rules
@@ -197,6 +201,7 @@ Each check makes one `GET` request to the monitor's target URL and stores the re
 | Tracking Tags | The page loads and every expected tag is in its HTML | Failed, naming the missing tags (uses the monitor's severity; default Warning) |
 | Search Visibility | The page doesn't say noindex, robots.txt doesn't block it, and its canonical URL is on the same domain | Failed when search engines are kept out (monitor severity, Critical by default); Warning for a robots.txt error or a canonical on another domain |
 | Domain Expiry | The domain registration has more than 30 days left | Warning at 30 days or less; Failed at 7 days or less, expired, or in its redemption period |
+| Page Speed | Google PageSpeed performance score (mobile) at or above the minimum in Settings (default 50), and real visitors' Core Web Vitals passing | Warning only (never Failed: a slow page isn't an outage) |
 | Broken Links | The page loads and none of its first 40 links/images/stylesheets/scripts are broken | Warning when any are broken; Failed only if the page itself doesn't load |
 | SSL Certificate | The certificate is trusted, matches the domain, and has more than 14 days left | Warning at 14 days or less; Failed at 3 days or less, or when expired, untrusted or for the wrong domain (both day limits in **Settings**) |
 
@@ -349,6 +354,31 @@ A **Domain Expiry** monitor watches when the site's domain registration runs out
 - The **weekly summary** lists domains expiring within **60 days**, earlier than the warning.
 - A few endings (e.g. `.io`) have no RDAP service: the check then says so as a Warning, and can be deleted.
 - **Adding one:** tick **Also watch the domain's registration expiry** on **Add client** or **Add monitors**. Checked daily.
+
+### Page speed
+
+A **Page Speed** monitor runs **Google PageSpeed Insights** on a page once a day, with the **mobile** profile (Google ranks sites mobile-first). It reports two things:
+
+- **Lab test (Lighthouse):** the 0–100 performance score, and load timings (Largest Contentful Paint, First Contentful Paint, Total Blocking Time, Cumulative Layout Shift). **Warning** when the score is below the minimum in **Settings → Monitoring rules** (default 50).
+- **Real visitors (Chrome UX Report):** Core Web Vitals (LCP, INP, CLS) at the 75th percentile over the last 28 days, for the page or, with less traffic, the whole site. **Warning** when the assessment fails (any of them not "good"). Low-traffic sites may have no real-visitor data; then only the lab test counts.
+
+It **never fails or alerts on Slack**: a slow page isn't an outage. Warnings show on the dashboard and in the **weekly summary** (*Page speed*). The monitor page shows the score, timings, real-visitor results, the three biggest suggested fixes, and a link to Google's full report.
+
+- **Adding one:** tick **Also test the homepage's speed with Google PageSpeed** on **Add client** or **Add monitors**, or add a *Page Speed* monitor for any page. Daily.
+- **Timing:** a test takes 10–40 seconds (Google loads the page). The scheduler starts page speed checks only at the beginning of a run, so every run still ends within Vercel's 60 s limit.
+- **Scores vary** a few points between runs; that's normal for Lighthouse.
+
+#### Getting the API key (once)
+
+Google's keyless allowance is shared by everyone and is usually used up, so a key is needed. It's free (25,000 tests a day).
+
+1. Go to **console.cloud.google.com** (signed in with your Figmints Google account). Create a project, e.g. `website-watch`, or pick an existing one.
+2. **APIs & Services → Library**: search **PageSpeed Insights API** → **Enable**.
+3. **APIs & Services → Credentials → Create credentials → API key**. Copy it.
+4. On the key: **Edit API key → API restrictions → Restrict key → PageSpeed Insights API** → Save. (Then the key can't be used for anything else if it leaks.)
+5. Add it as `PAGESPEED_API_KEY` in Vercel (Production, **Sensitive**) and in `.env.local`. Redeploy.
+
+The key goes only to Google's PageSpeed service and is never stored in check results or shown in messages.
 
 ### Tracking tags
 
@@ -509,6 +539,7 @@ curl -X POST http://localhost:3000/api/cron/run-checks -H "Authorization: Bearer
 | WordPress: backup missing after | 48 hours | 12–720 |
 | WordPress: minimum PHP version | 8.2 | e.g. 7.4, or empty to not check PHP |
 | WordPress: available updates count as a Warning | on | Off keeps updates listed (monitor page, weekly summary) without turning sites yellow |
+| Page speed: warn below this performance score | 50 | 0–100 (0 turns the score warning off) |
 | Weekly summary on, day, time | on, Monday, 9:00 | any day, any hour (`APP_TIMEZONE`) |
 
 The database enforces the same limits, and the app falls back to the defaults if the row is missing (e.g. before the migration runs). Changes apply to new checks; existing incidents and past results aren't re-judged. Everything else (connections, secrets, timezone) stays in environment variables.
