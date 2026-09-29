@@ -128,13 +128,13 @@ test("outdated core, PHP and plugins are warnings; deferred upgrades are respect
     problems.map((p) => `${p.level}: ${p.message}`),
     [
       "warning: WordPress 7.0.5 (latest is 7.1.2)",
-      "warning: PHP 8.1 is no longer supported (use 8.2+)",
+      "warning: PHP 8.1 is below the minimum (8.2)",
       "warning: 1 plugin with updates available",
     ],
   );
   const outcome = evaluateWordPress(problems, 900, 200);
   assert.equal(outcome.status, "warning");
-  assert.equal(outcome.error_message, "WordPress 7.0.5 (latest is 7.1.2); PHP 8.1 is no longer supported (use 8.2+); 1 plugin with updates available");
+  assert.equal(outcome.error_message, "WordPress 7.0.5 (latest is 7.1.2); PHP 8.1 is below the minimum (8.2); 1 plugin with updates available");
   const deferred = wordpressProblems(
     { ...healthy, wpVersion: "7.0.5", install: { status: "active", defer_wordpress_upgrades_until: "2026-10-01T00:00:00Z" } },
     now,

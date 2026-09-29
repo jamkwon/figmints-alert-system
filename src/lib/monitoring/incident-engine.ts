@@ -1,9 +1,8 @@
 // Pure incident rules: given a monitor's recent checks and its current unresolved
 // incident, decide what should change. No I/O, so it's easy to test.
+import { DEFAULT_SETTINGS, type AppSettings } from "../settings.ts";
 import type { CheckResult, Incident, Monitor, MonitorType, Severity } from "../types.ts";
 
-export const FAILURES_TO_OPEN = 2;
-export const SUCCESSES_TO_RESOLVE = 2;
 
 type Check = Pick<CheckResult, "status" | "passed" | "checked_at" | "http_status" | "error_message">;
 
@@ -71,6 +70,7 @@ export function decideIncident(
   monitor: Pick<Monitor, "name" | "severity_on_failure"> & Partial<Pick<Monitor, "monitor_type">>,
   history: Check[],
   current: Pick<Incident, "severity"> | undefined,
+  rules: Pick<AppSettings, "failuresToOpen" | "passesToResolve"> = DEFAULT_SETTINGS,
 ): IncidentDecision {
   const latest = history[0];
   if (!latest) return { kind: "none" };
@@ -79,7 +79,7 @@ export function decideIncident(
   const passStreak = leadingRun(history, true);
 
   if (current) {
-    if (passStreak >= SUCCESSES_TO_RESOLVE) return { kind: "resolve", resolvedAt: latest.checked_at };
+    if (passStreak >= rules.passesToResolve) return { kind: "resolve", resolvedAt: latest.checked_at };
     if (failStreak === 0) return { kind: "none" }; // one pass: wait for a second before resolving
     return {
       kind: "update",
@@ -92,7 +92,7 @@ export function decideIncident(
     };
   }
 
-  if (failStreak < FAILURES_TO_OPEN) return { kind: "none" };
+  if (failStreak < rules.failuresToOpen) return { kind: "none" };
   const streak = history.slice(0, failStreak);
   return {
     kind: "open",

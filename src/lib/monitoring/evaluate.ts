@@ -1,7 +1,6 @@
 // Pure pass/fail rules for a single check. No I/O, so it's easy to test.
+import { DEFAULT_SETTINGS, type AppSettings } from "../settings.ts";
 import type { CheckStatus, Monitor } from "../types.ts";
-
-export const DEFAULT_MAX_RESPONSE_TIME_MS = 3000;
 
 /** What the HTTP request observed. `error` is set when no usable response arrived. */
 export interface HttpObservation {
@@ -95,7 +94,8 @@ export function evaluateCheck(monitor: MonitorRules, obs: HttpObservation): Chec
   }
 
   if (monitor.monitor_type === "response_time") {
-    const max = monitor.max_response_time_ms ?? DEFAULT_MAX_RESPONSE_TIME_MS;
+    // performCheck fills in the Settings default; this is a last resort.
+    const max = monitor.max_response_time_ms ?? DEFAULT_SETTINGS.defaultMaxResponseMs;
     if (base.response_time_ms > max) {
       return {
         ...base,
@@ -110,11 +110,6 @@ export function evaluateCheck(monitor: MonitorRules, obs: HttpObservation): Chec
 }
 
 // SSL certificates ----------------------------------------------------------------
-
-/** At or under this many days left: warning (renewal due soon). */
-export const SSL_WARNING_DAYS = 14;
-/** At or under this many days left: failed (about to break the site). */
-export const SSL_FAILURE_DAYS = 3;
 
 /** What the TLS handshake observed. `error` is set when no certificate was read. */
 export interface CertificateObservation {
@@ -154,7 +149,12 @@ export function daysUntil(validTo: Date, now: Date): number {
   return Math.floor((validTo.getTime() - now.getTime()) / DAY_MS);
 }
 
-export function evaluateCertificate(obs: CertificateObservation, now: Date = new Date()): CheckOutcome {
+/** At or under sslFailureDays left: failed (about to break the site); at or under sslWarningDays: warning. */
+export function evaluateCertificate(
+  obs: CertificateObservation,
+  now: Date = new Date(),
+  rules: Pick<AppSettings, "sslWarningDays" | "sslFailureDays"> = DEFAULT_SETTINGS,
+): CheckOutcome {
   const base = { http_status: null, response_time_ms: Math.round(obs.responseTimeMs) };
   const fail = (message: string): CheckOutcome => ({ ...base, status: "failed", passed: false, error_message: message });
 
@@ -162,8 +162,8 @@ export function evaluateCertificate(obs: CertificateObservation, now: Date = new
   const days = daysUntil(obs.validTo, now);
   if (days < 0) return fail(`SSL certificate expired ${plural(-days, "day")} ago`);
   if (!obs.authorized) return fail(describeTlsError(obs.authorizationError ?? "UNKNOWN"));
-  if (days <= SSL_FAILURE_DAYS) return fail(`SSL certificate expires in ${plural(days, "day")}`);
-  if (days <= SSL_WARNING_DAYS) {
+  if (days <= rules.sslFailureDays) return fail(`SSL certificate expires in ${plural(days, "day")}`);
+  if (days <= rules.sslWarningDays) {
     return { ...base, status: "warning", passed: false, error_message: `SSL certificate expires in ${plural(days, "day")}` };
   }
   return { ...base, status: "passed", passed: true, error_message: null };

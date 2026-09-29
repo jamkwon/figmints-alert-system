@@ -3,6 +3,7 @@ import type { KeyObject } from "node:crypto";
 import { isIP } from "node:net";
 import { connect as connectTls } from "node:tls";
 import { Agent, fetch, type Response } from "undici";
+import { DEFAULT_SETTINGS, type AppSettings } from "../settings.ts";
 import type { Monitor } from "../types.ts";
 import {
   daysUntil,
@@ -349,7 +350,7 @@ function first(value: string | string[] | undefined): string | undefined {
  * otherwise) and reads the certificate. Uses the same SSRF-safe DNS lookup.
  * Doesn't send an HTTP request.
  */
-export async function performCertificateCheck(monitor: Monitor): Promise<HttpCheckResult> {
+export async function performCertificateCheck(monitor: Monitor, settings: AppSettings = DEFAULT_SETTINGS): Promise<HttpCheckResult> {
   const started = performance.now();
   const metadata: CheckMetadata = {};
   const observe = (partial: Partial<CertificateObservation>): CertificateObservation => ({
@@ -365,7 +366,7 @@ export async function performCertificateCheck(monitor: Monitor): Promise<HttpChe
   try {
     url = validateTargetUrl(monitor.target_url);
   } catch (err) {
-    return { outcome: evaluateCertificate(observe({ error: describeFetchError(err) })), metadata };
+    return { outcome: evaluateCertificate(observe({ error: describeFetchError(err) }), new Date(), settings), metadata };
   }
   const host = url.hostname.replace(/^\[|\]$/g, "");
   const port = url.protocol === "https:" && url.port ? Number(url.port) : 443;
@@ -403,7 +404,7 @@ export async function performCertificateCheck(monitor: Monitor): Promise<HttpChe
     socket.once("error", (err) => finish(observe({ error: describeFetchError(err) })));
   });
 
-  const outcome = evaluateCertificate(observation);
+  const outcome = evaluateCertificate(observation, new Date(), settings);
   if (observation.validTo) metadata.days_left = daysUntil(observation.validTo, new Date());
   return { outcome, metadata };
 }
@@ -566,7 +567,7 @@ async function fetchPluginReport(origin: string, key: KeyObject): Promise<{ repo
  * wordpress.org; plus WP Engine install details and backups when the WP Engine
  * API is configured and an install matches the site's domain.
  */
-export async function performWordPressCheck(monitor: Monitor): Promise<HttpCheckResult> {
+export async function performWordPressCheck(monitor: Monitor, settings: AppSettings = DEFAULT_SETTINGS): Promise<HttpCheckResult> {
   const started = performance.now();
   const metadata: CheckMetadata = {};
   const pageFailed = (partial: Partial<HttpObservation>): HttpCheckResult => ({
@@ -663,7 +664,7 @@ export async function performWordPressCheck(monitor: Monitor): Promise<HttpCheck
     isWordPress: signals.isWordPress,
     report,
   };
-  const problems = wordpressProblems(facts, new Date());
+  const problems = wordpressProblems(facts, new Date(), settings);
 
   Object.assign(metadata, {
     final_url: page.url.toString(),
@@ -714,11 +715,13 @@ export async function performWordPressCheck(monitor: Monitor): Promise<HttpCheck
   return { outcome: evaluateWordPress(problems, performance.now() - started, page.response.status), metadata };
 }
 
-/** Runs the right kind of check for the monitor. */
-export function performCheck(monitor: Monitor): Promise<HttpCheckResult> {
-  if (monitor.monitor_type === "ssl_expiry") return performCertificateCheck(monitor);
-  if (monitor.monitor_type === "broken_links") return performBrokenLinksCheck(monitor);
-  if (monitor.monitor_type === "tracking_tags") return performTrackingCheck(monitor);
-  if (monitor.monitor_type === "wordpress_health") return performWordPressCheck(monitor);
-  return performHttpCheck(monitor);
+/** Runs the right kind of check for the monitor, with the rules from Settings. */
+export function performCheck(monitor: Monitor, settings: AppSettings = DEFAULT_SETTINGS): Promise<HttpCheckResult> {
+  // Monitors without their own response time limit use the Settings default.
+  const m = { ...monitor, max_response_time_ms: monitor.max_response_time_ms ?? settings.defaultMaxResponseMs };
+  if (m.monitor_type === "ssl_expiry") return performCertificateCheck(m, settings);
+  if (m.monitor_type === "broken_links") return performBrokenLinksCheck(m);
+  if (m.monitor_type === "tracking_tags") return performTrackingCheck(m);
+  if (m.monitor_type === "wordpress_health") return performWordPressCheck(m, settings);
+  return performHttpCheck(m);
 }

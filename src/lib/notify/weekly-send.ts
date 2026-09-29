@@ -3,6 +3,7 @@ import { loadSystemAppData } from "@/lib/data";
 import { APP_TIMEZONE } from "@/lib/format";
 import { appUrl, postToSlack, slackWebhookUrl } from "@/lib/notify/send";
 import { buildWeeklySummary, summaryWeek, type SummaryInput } from "@/lib/notify/weekly";
+import { getSettings } from "@/lib/settings-store";
 import { getSupabase } from "@/lib/supabase/server";
 
 async function summaryInput(now: Date): Promise<SummaryInput> {
@@ -45,13 +46,15 @@ export async function sendWeeklySummary(now = new Date()): Promise<string | null
 let doneWeek: string | null = null;
 
 /**
- * Called by every scheduler run: sends this week's summary once it's due
- * (Monday 9:00 in APP_TIMEZONE, or later that week if the scheduler was down).
+ * Called by every scheduler run: sends this week's summary once it's due (the
+ * day and time in Settings, APP_TIMEZONE; within a day if the scheduler was down).
  * Claims the week in the database first, so overlapping runs can't both send.
  */
-export async function maybeSendWeeklySummary(now = new Date()): Promise<"sent" | "not_due" | string> {
+export async function maybeSendWeeklySummary(now = new Date()): Promise<"sent" | "not_due" | "off" | string> {
   if (!slackWebhookUrl()) return "not_due";
-  const { weekStart, due } = summaryWeek(now, APP_TIMEZONE);
+  const settings = await getSettings();
+  if (!settings.summaryEnabled) return "off";
+  const { weekStart, due } = summaryWeek(now, APP_TIMEZONE, settings.summaryWeekday, settings.summaryHour);
   if (!due || doneWeek === weekStart) return "not_due";
   const db = getSupabase();
   const claim = await db
