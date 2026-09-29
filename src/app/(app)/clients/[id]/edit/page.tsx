@@ -3,13 +3,13 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ClientForm } from "@/components/manage-forms";
 import { Panel, PageHeader } from "@/components/ui";
-import { getAppData } from "@/lib/data";
+import { getClientAppData } from "@/lib/data";
 
 export const metadata: Metadata = { title: "Edit client" };
 
 export default async function EditClientPage({ params }: PageProps<"/clients/[id]/edit">) {
   const { id } = await params;
-  const view = (await getAppData()).clients.find((c) => c.client.id === id);
+  const view = (await getClientAppData(id))?.clients.find((c) => c.client.id === id);
   if (!view) notFound();
   return (
     <>

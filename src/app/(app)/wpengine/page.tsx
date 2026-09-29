@@ -3,7 +3,7 @@ import { connection } from "next/server";
 import { EmptyState, LinkButton, Panel, PageHeader } from "@/components/ui";
 import { WpeImportForm } from "@/components/wpengine-import-form";
 import { getAppData } from "@/lib/data";
-import { MAX_MONITORS_PER_RUN } from "@/lib/monitoring/scheduler";
+import { CHECKS_PER_RUN_ESTIMATE } from "@/lib/monitoring/scheduler";
 import { buildCandidates, checksPerDay, type ImportCandidate } from "@/lib/monitoring/wpengine-import";
 import { isWpeConfigured, listInstalls, listSites } from "@/lib/monitoring/wpengine";
 
@@ -63,7 +63,7 @@ export default async function WpeImportPage({ searchParams }: PageProps<"/wpengi
         <WpeImportForm
           candidates={candidates}
           currentPerDay={currentPerDay}
-          capacityPerDay={{ fiveMinutes: MAX_MONITORS_PER_RUN * 288, everyMinute: MAX_MONITORS_PER_RUN * 1440 }}
+          capacityPerDay={{ fiveMinutes: CHECKS_PER_RUN_ESTIMATE * 288, everyMinute: CHECKS_PER_RUN_ESTIMATE * 1440 }}
           disabledReason={source === "sample" ? "Connect Supabase to import sites." : undefined}
         />
       )}

@@ -271,7 +271,9 @@ function fatalErrors(v: unknown[]): FatalError[] {
     if (!message) return [];
     const count = typeof e.count === "number" && Number.isFinite(e.count) ? Math.max(1, Math.round(e.count)) : 1;
     const line = typeof e.line === "number" && Number.isFinite(e.line) ? Math.max(0, Math.round(e.line)) : 0;
-    return [{ firstAt: text(e.first_at, 40), lastAt: text(e.last_at, 40), count, message, file: text(e.file, 300) ?? "", line }];
+    // Error messages can quote what a visitor typed: mask email addresses.
+    const masked = message.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[address]");
+    return [{ firstAt: text(e.first_at, 40), lastAt: text(e.last_at, 40), count, message: masked, file: text(e.file, 300) ?? "", line }];
   });
 }
 

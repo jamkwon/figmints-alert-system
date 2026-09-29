@@ -235,6 +235,8 @@ export async function performHttpCheck(monitor: Monitor): Promise<HttpCheckResul
 // Broken links ----------------------------------------------------------------------
 
 const LINK_TIMEOUT_MS = 8_000;
+/** No new link probes after this much of a scan (page load included). */
+const LINK_SCAN_BUDGET_MS = 20_000;
 // Be gentle with the client's own server: many hosts throttle bursts of requests.
 const SAME_SITE_CONCURRENCY = 2;
 const EXTERNAL_CONCURRENCY = 6;
@@ -313,6 +315,12 @@ export async function performBrokenLinksCheck(monitor: Monitor): Promise<HttpChe
   const external = links.filter((l) => new URL(l.url).hostname !== pageHost);
   async function worker(queue: typeof links) {
     while (queue.length > 0) {
+      // A whole scan must fit in a scheduler run: stop starting new links after
+      // LINK_SCAN_BUDGET_MS; the rest count as not checked.
+      if (performance.now() - started > LINK_SCAN_BUDGET_MS) {
+        unverified += queue.splice(0).length;
+        return;
+      }
       const link = queue.shift()!;
       // probeLink never throws, but a scan must survive any single odd link.
       const res = await probeLink(link.url).catch(
@@ -336,7 +344,8 @@ export async function performBrokenLinksCheck(monitor: Monitor): Promise<HttpChe
     links_found: total,
     links_checked: links.length,
     links_unverified: unverified,
-    broken_links: broken.slice(0, 25),
+    // A page controls these URLs: keep them short.
+    broken_links: broken.slice(0, 25).map((b) => ({ ...b, url: b.url.slice(0, 500) })),
   });
   const outcome = evaluateLinks(page.url.toString(), links.length, broken, performance.now() - started, page.response.status);
   return { outcome, metadata };
@@ -387,7 +396,11 @@ export async function performCertificateCheck(monitor: Monitor, settings: AppSet
       rejectUnauthorized: false,
       timeout: TLS_TIMEOUT_MS,
     });
+    // The socket timeout only fires when the server goes quiet; a server that
+    // trickles bytes could keep it open, so there's also a hard deadline.
+    const deadline = setTimeout(() => finish(observe({ error: `Timed out after ${TLS_TIMEOUT_MS / 1000} s` })), TLS_TIMEOUT_MS);
     const finish = (obs: CertificateObservation) => {
+      clearTimeout(deadline);
       socket.destroy();
       resolve(obs);
     };
@@ -470,6 +483,13 @@ const WPORG_TIMEOUT_MS = 8_000;
 const CORE_TTL_MS = 60 * 60_000;
 const PLUGIN_TTL_MS = 6 * 60 * 60_000;
 const MAX_PLUGIN_LOOKUPS = 15;
+// When wordpress.org can't be reached, ask again sooner than the normal cache time.
+const WPORG_RETRY_MS = 10 * 60_000;
+
+/** A cache time that, for a failed lookup, runs out after WPORG_RETRY_MS instead. */
+function cachedAt(failed: boolean, ttl: number): number {
+  return failed ? Date.now() - ttl + WPORG_RETRY_MS : Date.now();
+}
 
 let coreCache: { at: number; version: string | null } | null = null;
 const pluginCache = new Map<string, { at: number; version: string | null }>();
@@ -488,7 +508,7 @@ async function latestCoreVersion(): Promise<string | null> {
   } catch {
     // wordpress.org unreachable: skip the core comparison this time.
   }
-  coreCache = { at: Date.now(), version };
+  coreCache = { at: cachedAt(version === null, CORE_TTL_MS), version };
   return version;
 }
 
@@ -497,15 +517,19 @@ async function latestPluginVersion(slug: string): Promise<string | null> {
   const hit = pluginCache.get(slug);
   if (hit && Date.now() - hit.at < PLUGIN_TTL_MS) return hit.version;
   let version: string | null = null;
+  let failed = false;
   try {
     const url = `https://api.wordpress.org/plugins/info/1.2/?action=plugin_information&request%5Bslug%5D=${encodeURIComponent(slug)}&request%5Bfields%5D%5Bsections%5D=0`;
     const res = await fetch(url, { signal: AbortSignal.timeout(WPORG_TIMEOUT_MS), headers: { "user-agent": USER_AGENT } });
     const body = (await res.json()) as { version?: string; error?: string };
+    // body.error: not a wordpress.org plugin (premium or custom). That answer keeps.
     version = body.error ? null : (body.version ?? null);
+    failed = !res.ok;
   } catch {
     version = null;
+    failed = true;
   }
-  pluginCache.set(slug, { at: Date.now(), version });
+  pluginCache.set(slug, { at: cachedAt(failed, PLUGIN_TTL_MS), version });
   return version;
 }
 
@@ -544,6 +568,11 @@ function pluginReportFor(origin: string, key: KeyObject): Promise<{ report: Plug
  * request is signed for this host only, and redirects aren't followed.
  */
 async function fetchPluginReport(origin: string, key: KeyObject): Promise<{ report: PluginReport | null; note: string }> {
+  // Signed requests and reports only travel encrypted: over plain HTTP they could
+  // be read, and the signature replayed, by anyone on the network path.
+  if (!origin.startsWith("https://")) {
+    return { report: null, note: "Skipped the Website Watch plugin: the site isn't on HTTPS" };
+  }
   try {
     const { response } = await safeFetch(validateTargetUrl(origin + WP_PLUGIN_ROUTE), {
       method: "POST",
@@ -551,7 +580,7 @@ async function fetchPluginReport(origin: string, key: KeyObject): Promise<{ repo
       dispatcher: pluginAgent,
       followRedirects: false,
       accept: "application/json",
-      headers: signRequest(key, new URL(origin).hostname),
+      headers: signRequest(key, origin),
     });
     if (response.status === 401 || response.status === 403) {
       await response.body?.cancel();
@@ -621,8 +650,15 @@ export async function performWordPressCheck(monitor: Monitor, settings: AppSetti
   const finalHost = page.url.hostname;
 
   // WP Engine: install details and backups for the install serving this domain.
+  // 15 s at most in all (listing installs can take several requests on a cold cache).
   async function lookupWpEngine(): Promise<{ install: WpeInstall | null; backups: BackupStatus | null; error: string | null }> {
     if (!isWpeConfigured()) return { install: null, backups: null, error: null };
+    const timeout = new Promise<{ install: null; backups: null; error: string }>((resolve) =>
+      setTimeout(() => resolve({ install: null, backups: null, error: "WP Engine API took too long; will retry next check" }), TIMEOUT_MS),
+    );
+    return Promise.race([timeout, lookupWpEngineNow()]);
+  }
+  async function lookupWpEngineNow(): Promise<{ install: WpeInstall | null; backups: BackupStatus | null; error: string | null }> {
     try {
       const installs = await listInstalls();
       const install = matchInstall(installs, finalHost) ?? matchInstall(installs, new URL(monitor.target_url).hostname);
@@ -831,7 +867,13 @@ export async function performDomainCheck(monitor: Monitor): Promise<HttpCheckRes
     },
     metadata,
   });
-  const candidates = domainCandidates(new URL(monitor.target_url).hostname);
+  let hostname: string;
+  try {
+    hostname = new URL(monitor.target_url).hostname;
+  } catch {
+    return warn("The monitor's URL isn't valid");
+  }
+  const candidates = domainCandidates(hostname);
   if (candidates.length === 0) return warn("No domain name to look up");
   let bootstrap: unknown;
   try {
@@ -984,7 +1026,12 @@ export async function performContactFormCheck(monitor: Monitor): Promise<HttpChe
   // Ask the site plugin while the page loads: both can be slow on uncached pages
   // (form pages often are), and one after the other could outlast a scheduler run.
   const signingKey = pluginKey();
-  const targetOrigin = new URL(monitor.target_url).origin;
+  let targetOrigin: string;
+  try {
+    targetOrigin = validateTargetUrl(monitor.target_url).origin;
+  } catch (err) {
+    return pageFailed({ error: describeFetchError(err) });
+  }
   const earlyPlugin = signingKey ? pluginReportFor(targetOrigin, signingKey) : null;
   let page: { response: Response; url: URL };
   let html: string;

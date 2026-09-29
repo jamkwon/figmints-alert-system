@@ -6,7 +6,7 @@ import { CheckHistoryTable } from "@/components/check-history-table";
 import { RunCheckButton } from "@/components/run-check-button";
 import { CheckStatusBadge, HealthBadge, IncidentStatusBadge, SeverityBadge } from "@/components/status";
 import { LinkButton, Panel, PageHeader, When } from "@/components/ui";
-import { getAppData, getCheckHistory, getDailyUptime, getScoreHistory, type MonitorView } from "@/lib/data";
+import { getAppDataFor, getCheckHistory, getDailyUptime, getDataSource, getScoreHistory, type MonitorView } from "@/lib/data";
 import { UptimeBars, UptimeLegend } from "@/components/uptime-bars";
 import { dayBars, recentDays } from "@/lib/uptime-history";
 import { ScoreTrend } from "@/components/score-trend";
@@ -32,6 +32,7 @@ import { failingSince } from "@/lib/health";
 import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS, SEVERITY_LABELS, countsTowardUptime, formatInterval } from "@/lib/labels";
 import { TRACKING_TAGS, TRACKING_TAG_KEYS } from "@/lib/monitoring/tracking";
 import { compareVersions } from "@/lib/monitoring/wordpress";
+import { WP_PLUGIN_VERSION } from "@/lib/monitoring/wp-plugin";
 import { getSettings } from "@/lib/settings-store";
 
 // Run check can start a broken link scan, which takes up to ~40 seconds.
@@ -40,8 +41,8 @@ export const maxDuration = 60;
 const HISTORY_LIMIT = 50;
 
 async function findMonitor(id: string): Promise<MonitorView | undefined> {
-  const { monitors } = await getAppData();
-  return monitors.find((m) => m.monitor.id === id);
+  const data = await getAppDataFor("monitor", id);
+  return data?.monitors.find((m) => m.monitor.id === id);
 }
 
 export async function generateMetadata({ params }: PageProps<"/monitors/[id]">): Promise<Metadata> {
@@ -96,9 +97,8 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
     { label: "Last 30 days", passed: uptime?.passed_30d ?? 0, checks: uptime?.checks_30d ?? 0 },
   ];
   const showsUptime = countsTowardUptime(monitor.monitor_type);
-  const [history, data, rules, scoreHistory, daily] = await Promise.all([
+  const [history, rules, scoreHistory, daily] = await Promise.all([
     getCheckHistory(monitor.id, HISTORY_LIMIT),
-    getAppData(),
     getSettings(),
     monitor.monitor_type === "page_speed" ? getScoreHistory(monitor.id) : Promise.resolve([]),
     showsUptime ? getDailyUptime([monitor.id]) : Promise.resolve(new Map()),
@@ -107,7 +107,7 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
   const since = failingSince(history);
 
   let disabledReason: string | undefined;
-  if (data.source === "sample") disabledReason = "Connect Supabase to run real checks";
+  if (getDataSource() === "sample") disabledReason = "Connect Supabase to run real checks";
   else if (health === "inactive") disabledReason = "This monitor is paused";
 
   return (
@@ -512,7 +512,14 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
                     <ConfigRow label="Site plugin">
                       {wp.report ? (
                         <>
-                          Reporting{wp.report.memory_limit && <> · PHP memory {wp.report.memory_limit}</>}
+                          Reporting{wp.report.plugin_version && <> · version {wp.report.plugin_version}</>}
+                          {wp.report.memory_limit && <> · PHP memory {wp.report.memory_limit}</>}
+                          {wp.report.plugin_version && compareVersions(wp.report.plugin_version, WP_PLUGIN_VERSION) < 0 && (
+                            <span className="block text-xs text-amber-700">
+                              Version {WP_PLUGIN_VERSION} is available: download it from Settings → WordPress plugin and
+                              upload it over this one.
+                            </span>
+                          )}
                           <span className="block text-xs text-slate-500">
                             WordPress last checked for updates{" "}
                             {wp.report.updates_checked_at ? timeAgo(wp.report.updates_checked_at) : "never"}

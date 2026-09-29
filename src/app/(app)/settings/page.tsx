@@ -12,7 +12,7 @@ import { SettingsForm } from "@/components/settings-form";
 import { WEEKDAY_NAMES } from "@/lib/settings";
 import { getSettingsInfo } from "@/lib/settings-store";
 import { APP_TIMEZONE } from "@/lib/format";
-import { allowedDomains } from "@/lib/auth/session";
+import { allowedDomains, requireStaff } from "@/lib/auth/session";
 import { MAX_LINKS } from "@/lib/monitoring/links";
 import { checkWpeConnection } from "@/lib/monitoring/wpengine";
 import { WP_PLUGIN_VERSION, WP_PLUGIN_ZIP, pluginKey, pluginTestEmail } from "@/lib/monitoring/wp-plugin";
@@ -60,6 +60,8 @@ function EnvStatus({ found, options }: { found: string | null; options: readonly
 
 export default async function SettingsPage({ searchParams }: PageProps<"/settings">) {
   await connection();
+  // Check the user before reading anything (settings, scheduler status).
+  await requireStaff();
   const saved = (await searchParams).saved === "1";
   const settingsInfo = await getSettingsInfo();
   const rules = settingsInfo.settings;

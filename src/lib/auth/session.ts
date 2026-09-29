@@ -4,25 +4,28 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { connection } from "next/server";
 import { cache } from "react";
-import { isStaff, parseAllowedDomains, type StaffClaims } from "@/lib/auth/allowed";
-import { PUBLIC_KEY_VARS, URL_VARS, firstSetEnv, isSupabaseConfigured } from "@/lib/supabase/config";
+import { authModeFor, isStaff, parseAllowedDomains, type AuthMode, type StaffClaims } from "@/lib/auth/allowed";
+import { PUBLIC_KEY_VARS, SECRET_KEY_VARS, URL_VARS, firstSetEnv } from "@/lib/supabase/config";
+
+export type { AuthMode };
 
 export interface StaffUser {
   email: string;
   name: string | null;
 }
 
-export type AuthMode =
-  /** No Supabase: the app shows sample data only, so no login is needed. */
-  | "disabled"
-  /** Supabase is connected: every page and action requires a staff login. */
-  | "required"
-  /** Supabase is connected but the login key is missing: everything is locked. */
-  | "misconfigured";
-
+/**
+ * "disabled": no Supabase at all, locally: sample data, no login.
+ * "required": Supabase connected: every page and action needs a staff login.
+ * "misconfigured": some Supabase settings missing, or none on Vercel: locked.
+ */
 export function getAuthMode(): AuthMode {
-  if (!isSupabaseConfigured()) return "disabled";
-  return firstSetEnv(PUBLIC_KEY_VARS) ? "required" : "misconfigured";
+  return authModeFor({
+    url: firstSetEnv(URL_VARS) !== undefined,
+    secretKey: firstSetEnv(SECRET_KEY_VARS) !== undefined,
+    publicKey: firstSetEnv(PUBLIC_KEY_VARS) !== undefined,
+    onVercel: Boolean(process.env.VERCEL),
+  });
 }
 
 export function allowedDomains(): string[] {

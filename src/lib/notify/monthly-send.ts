@@ -9,7 +9,7 @@ import { getSupabase } from "@/lib/supabase/server";
 
 // Building reports stops after this, so posting fits in a scheduler run; the
 // message then lists the rest as "…and N more".
-const BUILD_BUDGET_MS = 25_000;
+const BUILD_BUDGET_MS = 15_000;
 const CONCURRENCY = 4;
 
 /** Builds last month's (or `monthKey`'s) reports for active clients and posts one Slack message. */
@@ -46,7 +46,7 @@ export async function sendMonthlyReports(monthKey?: string, now = new Date()): P
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
   if (skipped > 0) console.warn(`[monthly reports] ${skipped} client(s) left out: out of time`);
-  return postToSlack(buildMonthlyReportsMessage(month.label, lines, appUrl()));
+  return postToSlack(buildMonthlyReportsMessage(month.label, lines, appUrl(), skipped));
 }
 
 // The month this server instance already knows is posted, to skip the database check.

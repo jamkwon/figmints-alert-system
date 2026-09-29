@@ -2,8 +2,10 @@ import "server-only";
 import { isInFuture } from "@/lib/format";
 import { decideIncident, type IncidentDecision } from "@/lib/monitoring/incident-engine";
 import { SYSTEM_ACTOR, logIncidentEvent } from "@/lib/monitoring/incident-events";
+import { withoutNul } from "@/lib/monitoring/storable";
+import { alertFor } from "@/lib/notify/alerts";
 import { notifyIncidentChange } from "@/lib/notify/send";
-import { performCheck } from "@/lib/monitoring/run-check";
+import { performCheck, type HttpCheckResult } from "@/lib/monitoring/run-check";
 import type { AppSettings } from "@/lib/settings";
 import { getSettings } from "@/lib/settings-store";
 import { getSupabase } from "@/lib/supabase/server";
@@ -12,6 +14,8 @@ import type { CheckResult, Incident, Monitor } from "@/lib/types";
 // Enough history to count a long failure streak for the incident description.
 const ENGINE_HISTORY = 20;
 const UNIQUE_VIOLATION = "23505";
+// How soon a slower monitor re-checks to confirm a new failure or recovery.
+const RECHECK_MINUTES = 5;
 
 export interface RecordedCheck {
   result: CheckResult;
@@ -38,7 +42,24 @@ export async function runAndRecordCheck(monitor: Monitor): Promise<RecordedCheck
   const settings = await getSettings();
   const db = getSupabase();
   const previousScores = monitor.monitor_type === "page_speed" ? await recentScores(monitor.id, checkedAt) : undefined;
-  const { outcome, metadata } = await performCheck(monitor, settings, { previousScores });
+  let checked: HttpCheckResult;
+  try {
+    checked = await performCheck(monitor, settings, { previousScores });
+  } catch (err) {
+    // A bug or surprise in the check itself: record it (as a warning, not an outage)
+    // so it's visible and the monitor moves on, instead of retrying silently forever.
+    checked = {
+      outcome: {
+        status: "warning",
+        passed: false,
+        http_status: null,
+        response_time_ms: Date.now() - checkedAt.getTime(),
+        error_message: `Website Watch couldn't finish this check: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500),
+      },
+      metadata: {},
+    };
+  }
+  const { outcome, metadata } = withoutNul(checked);
 
   const { data, error } = await db
     .from("check_results")
@@ -63,11 +84,25 @@ export async function runAndRecordCheck(monitor: Monitor): Promise<RecordedCheck
     .eq("id", monitor.id);
   if (update.error) throw new Error(`Failed to update monitor: ${update.error.message}`);
 
-  const incident = await applyIncidentRules(monitor, settings);
-  return { result: data as CheckResult, incident };
+  const { kind, hadIncident } = await applyIncidentRules(monitor, settings);
+
+  // Hourly/daily/weekly monitors confirm a change quickly: a first failure is
+  // re-checked within minutes (instead of a day later) before an incident opens,
+  // and so is a first pass while an incident is open.
+  const settling = (!outcome.passed && !hadIncident && kind === "none") || (outcome.passed && hadIncident && kind !== "resolve");
+  if (settling && monitor.interval_minutes > RECHECK_MINUTES) {
+    await db
+      .from("monitors")
+      .update({ next_check_at: new Date(checkedAt.getTime() + RECHECK_MINUTES * 60_000).toISOString() })
+      .eq("id", monitor.id);
+  }
+  return { result: data as CheckResult, incident: kind };
 }
 
-async function applyIncidentRules(monitor: Monitor, settings: AppSettings): Promise<IncidentDecision["kind"]> {
+async function applyIncidentRules(
+  monitor: Monitor,
+  settings: AppSettings,
+): Promise<{ kind: IncidentDecision["kind"]; hadIncident: boolean }> {
   const db = getSupabase();
   const [history, current] = await Promise.all([
     db
@@ -130,28 +165,57 @@ async function applyIncidentRules(monitor: Monitor, settings: AppSettings): Prom
     }
 
     case "update": {
-      const res = await db.from("incidents").update(decision.changes).eq("id", existing!.id);
+      const incident = existing!;
+      const res = await db.from("incidents").update(decision.changes).eq("id", incident.id);
       if (res.error) throw new Error(`Failed to update incident: ${res.error.message}`);
-      if (decision.changes.severity !== existing!.severity) {
+      if (decision.changes.severity !== incident.severity) {
         await logIncidentEvent(
-          existing!.id,
+          incident.id,
           SYSTEM_ACTOR,
           "severity_changed",
-          `Severity raised from ${existing!.severity} to ${decision.changes.severity}`,
+          `Severity raised from ${incident.severity} to ${decision.changes.severity}`,
         );
-        await notifyIncidentChange("escalated", existing!.id);
+        await notifyIncidentChange("escalated", incident.id);
+        break;
       }
+      if (incident.status === "expected_maintenance") {
+        // Still failing after the maintenance window ended: it's a real problem now.
+        const website = await db.from("websites").select("maintenance_until").eq("id", monitor.website_id).single();
+        if (website.error) throw new Error(`Failed to load website: ${website.error.message}`);
+        if (!isInFuture(website.data.maintenance_until)) {
+          const reopened = await db
+            .from("incidents")
+            .update({ status: "open" })
+            .eq("id", incident.id)
+            .eq("status", "expected_maintenance")
+            .select("id");
+          if (reopened.error) throw new Error(`Failed to reopen incident: ${reopened.error.message}`);
+          if (reopened.data.length > 0) {
+            await logIncidentEvent(incident.id, SYSTEM_ACTOR, "status_changed", "Maintenance window ended and it's still failing; reopened");
+            await notifyIncidentChange("opened", incident.id);
+          }
+        }
+        break;
+      }
+      // A Critical incident whose alert never went out (Slack was down or not set
+      // up yet): try again. notifyIncidentChange claims it, so it's sent once.
+      if (!incident.alerted_at && alertFor("opened", incident)) await notifyIncidentChange("opened", incident.id);
       break;
     }
 
     case "resolve": {
       // Keep "ignored" as the status so history shows nobody acted on it; just close it.
       const status = existing!.status === "ignored" ? "ignored" : "resolved";
+      // Only if still unresolved: someone may have resolved it by hand meanwhile,
+      // and it must not be closed (and announced) twice.
       const res = await db
         .from("incidents")
         .update({ status, resolved_at: decision.resolvedAt })
-        .eq("id", existing!.id);
+        .eq("id", existing!.id)
+        .is("resolved_at", null)
+        .select("id");
       if (res.error) throw new Error(`Failed to resolve incident: ${res.error.message}`);
+      if (res.data.length === 0) break;
       await logIncidentEvent(
         existing!.id,
         SYSTEM_ACTOR,
@@ -164,5 +228,5 @@ async function applyIncidentRules(monitor: Monitor, settings: AppSettings): Prom
       break;
     }
   }
-  return decision.kind;
+  return { kind: decision.kind, hadIncident: existing !== undefined };
 }

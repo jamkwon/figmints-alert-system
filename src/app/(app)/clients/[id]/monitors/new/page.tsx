@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AddMonitorsForm, MonitorForm } from "@/components/manage-forms";
 import { Panel, PageHeader } from "@/components/ui";
-import { getAppData } from "@/lib/data";
+import { getClientAppData } from "@/lib/data";
 
 export const metadata: Metadata = { title: "Add monitors" };
 
@@ -18,7 +18,7 @@ export default async function NewMonitorsPage({ params, searchParams }: PageProp
   const sp = await searchParams;
   const website = typeof sp.website === "string" ? sp.website : undefined;
   const mode: keyof typeof TABS = sp.mode === "quick" ? "quick" : "single";
-  const view = (await getAppData()).clients.find((c) => c.client.id === id);
+  const view = (await getClientAppData(id))?.clients.find((c) => c.client.id === id);
   if (!view) notFound();
   const websites = view.websites.map((w) => w.website);
   const tabHref = (m: keyof typeof TABS) => {

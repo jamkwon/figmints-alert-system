@@ -16,7 +16,8 @@ import {
   pluginZip,
   publicKeyBase64,
   signRequest,
-  signedMessage,
+  SIGNATURE_V2_HEADER,
+  signedMessageV2,
 } from "./wp-plugin.ts";
 
 // Trimmed from a real response of the plugin on WordPress 7.1.2 (WordPress Playground).
@@ -102,23 +103,30 @@ test("a site with the plugin isn't reported as 'WordPress not detected'", () => 
 
 const { privateKey } = generateKeyPairSync("ed25519");
 
-/** Verifies like the plugin does: raw 32-byte public key, message rebuilt from its own host. */
+/** Verifies like the plugin (1.4.0) does: raw 32-byte public key, message rebuilt from its own host. */
 function pluginAccepts(publicKey: string, host: string, headers: Record<string, string>): boolean {
   const spki = Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), Buffer.from(publicKey, "base64")]);
   const key = createPublicKey({ key: spki, format: "der", type: "spki" });
-  const message = signedMessage(host, Number(headers[TIMESTAMP_HEADER]));
-  return verify(null, Buffer.from(message), key, Buffer.from(headers[SIGNATURE_HEADER], "base64"));
+  const message = signedMessageV2(host, Number(headers[TIMESTAMP_HEADER]));
+  return verify(null, Buffer.from(message), key, Buffer.from(headers[SIGNATURE_V2_HEADER], "base64"));
 }
 
 test("a signed request verifies with the public key for that host only", () => {
   const pub = publicKeyBase64(privateKey);
-  const headers = signRequest(privateKey, "www.figmints.com", Date.parse("2026-09-28T19:00:00Z"));
+  const headers = signRequest(privateKey, "https://www.figmints.com", Date.parse("2026-09-28T19:00:00Z"));
   assert.equal(headers[TIMESTAMP_HEADER], "1790622000");
-  assert.equal(Buffer.from(headers[SIGNATURE_HEADER], "base64").length, 64);
+  assert.equal(Buffer.from(headers[SIGNATURE_V2_HEADER], "base64").length, 64);
   assert.equal(pluginAccepts(pub, "www.figmints.com", headers), true);
   assert.equal(pluginAccepts(pub, "other-client.com", headers), false, "useless on another site");
   const other = publicKeyBase64(generateKeyPairSync("ed25519").privateKey);
   assert.equal(pluginAccepts(other, "www.figmints.com", headers), false, "another key can't sign for us");
+});
+
+test("signatures cover the HTTPS address, and plain HTTP is never signed", () => {
+  assert.equal(signedMessageV2("WWW.Figmints.com", 1), "website-watch-health/v2\nhttps://www.figmints.com\n1");
+  assert.throws(() => signRequest(privateKey, "http://www.figmints.com"));
+  const headers = signRequest(privateKey, "https://www.figmints.com");
+  assert.notEqual(headers[SIGNATURE_V2_HEADER], headers[SIGNATURE_HEADER], "the older plugins' signature is a different one");
 });
 
 test("the downloaded plugin carries only the public key", () => {
@@ -137,7 +145,9 @@ test("the downloaded plugin carries only the public key", () => {
   assert.ok(!/^function /m.test(php), "no top-level function declarations");
   // The PHP source must contain the escapes themselves: '/^www\\./' (PHP makes it /^www\./) and "\n".
   assert.ok(php.includes("preg_replace('/^www\\\\./', '', $host)"), "PHP regex escaping survives the template");
-  assert.ok(php.includes('"website-watch-health/v1\\n" . $host . "\\n" . $timestamp'), "same message format as signedMessage");
+  assert.ok(php.includes('"website-watch-health/v2\\nhttps://" . $host . "\\n" . $timestamp'), "same message format as signedMessageV2");
+  assert.ok(php.includes("get_header('x-website-watch-signature-v2')"), "reads the v2 signature only");
+  assert.ok(php.includes("INSERT IGNORE INTO {$wpdb->options}"), "single use is enforced by the database");
   assert.throws(() => pluginSource("not-a-key"));
   const zip = pluginZip(pub);
   assert.ok(zip.includes(Buffer.from("website-watch-health/website-watch-health.php")), "zip has the folder WordPress expects");

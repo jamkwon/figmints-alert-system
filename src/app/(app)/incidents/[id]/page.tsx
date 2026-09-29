@@ -6,7 +6,7 @@ import { CheckHistoryTable } from "@/components/check-history-table";
 import { IncidentControls } from "@/components/incident-controls";
 import { IncidentStatusBadge, SeverityBadge, TeamLabel } from "@/components/status";
 import { Panel, PageHeader, When } from "@/components/ui";
-import { getAppData, getCheckHistory, getIncidentEvents, type IncidentView } from "@/lib/data";
+import { getAppDataFor, getCheckHistory, getDataSource, getIncidentEvents, type IncidentView } from "@/lib/data";
 import { displayUrl, formatDateTime, formatDuration } from "@/lib/format";
 import { isUnresolvedIncident } from "@/lib/health";
 import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS } from "@/lib/labels";
@@ -14,8 +14,8 @@ import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS } from "@/lib/labels";
 const RECENT_CHECKS = 15;
 
 async function findIncident(id: string): Promise<IncidentView | undefined> {
-  const { incidents } = await getAppData();
-  return incidents.find((i) => i.incident.id === id);
+  const data = await getAppDataFor("incident", id);
+  return data?.incidents.find((i) => i.incident.id === id);
 }
 
 export async function generateMetadata({ params }: PageProps<"/incidents/[id]">): Promise<Metadata> {
@@ -46,9 +46,8 @@ export default async function IncidentDetailPage({ params }: PageProps<"/inciden
   if (!view) notFound();
 
   const { incident, client, website, monitor } = view;
-  const [history, data, events] = await Promise.all([
+  const [history, events] = await Promise.all([
     monitor ? getCheckHistory(monitor.id, RECENT_CHECKS) : Promise.resolve([]),
-    getAppData(),
     getIncidentEvents(incident.id),
   ]);
   const closed = !isUnresolvedIncident(incident);
@@ -163,7 +162,7 @@ export default async function IncidentDetailPage({ params }: PageProps<"/inciden
             team={incident.assigned_team}
             notes={incident.internal_notes}
             disabledReason={
-              data.source === "sample" ? "Showing sample data. Connect Supabase to update incidents." : undefined
+              getDataSource() === "sample" ? "Showing sample data. Connect Supabase to update incidents." : undefined
             }
           />
         </Panel>

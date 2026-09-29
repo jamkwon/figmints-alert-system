@@ -5,19 +5,25 @@
 //
 // Requests are signed with an Ed25519 private key that never leaves Website
 // Watch. The plugin holds only the public key, so the file contains no secret.
-// Each signature covers the site's host and the current time, and the plugin
-// accepts it once, so a captured or redirected request is useless elsewhere,
-// later, or a second time.
+// Each signature covers "https://" plus the site's host, and the current time,
+// and the plugin accepts it once, so a captured or redirected request is useless
+// on another site, over plain HTTP, later, or a second time.
 import { createPrivateKey, createPublicKey, sign, type KeyObject } from "node:crypto";
 import { firstSetEnv } from "../supabase/config.ts";
 import { zipFiles } from "./zip.ts";
 
-export const WP_PLUGIN_VERSION = "1.3.0";
+export const WP_PLUGIN_VERSION = "1.4.0";
 /** Folder and main file name inside the zip, and the plugin's slug. */
 export const WP_PLUGIN_SLUG = "website-watch-health";
 export const WP_PLUGIN_ZIP = `${WP_PLUGIN_SLUG}.zip`;
 /** Works with or without pretty permalinks. */
 export const WP_PLUGIN_ROUTE = "/?rest_route=/website-watch/v1/status";
+/** Signature over the site's HTTPS address (plugin 1.4.0 and later). */
+export const SIGNATURE_V2_HEADER = "x-website-watch-signature-v2";
+/**
+ * The older signature (host only), still sent so plugins before 1.4.0 keep
+ * reporting until they're updated. 1.4.0 ignores it.
+ */
 export const SIGNATURE_HEADER = "x-website-watch-signature";
 export const TIMESTAMP_HEADER = "x-website-watch-timestamp";
 /** How far the plugin accepts a signature's time from its own clock. */
@@ -46,17 +52,26 @@ export function publicKeyBase64(key: KeyObject): string {
   return spki.subarray(spki.length - 32).toString("base64");
 }
 
-/** What gets signed: a fixed label, the site's host and the time. */
+/** What plugins before 1.4.0 check: a fixed label, the site's host and the time. */
 export function signedMessage(host: string, timestamp: number): string {
   return `website-watch-health/v1\n${host.toLowerCase()}\n${timestamp}`;
 }
 
-/** Headers for one request to the plugin on `host`. */
-export function signRequest(key: KeyObject, host: string, now = Date.now()): Record<string, string> {
+/** What 1.4.0 checks: a fixed label, the site's HTTPS address and the time. */
+export function signedMessageV2(host: string, timestamp: number): string {
+  return `website-watch-health/v2\nhttps://${host.toLowerCase()}\n${timestamp}`;
+}
+
+/** Headers for one request to the plugin at `origin`, which must be HTTPS. */
+export function signRequest(key: KeyObject, origin: string, now = Date.now()): Record<string, string> {
+  const url = new URL(origin);
+  if (url.protocol !== "https:") throw new Error("The plugin is only contacted over HTTPS");
   const timestamp = Math.floor(now / 1000);
+  const signed = (message: string) => sign(null, Buffer.from(message), key).toString("base64");
   return {
     [TIMESTAMP_HEADER]: String(timestamp),
-    [SIGNATURE_HEADER]: sign(null, Buffer.from(signedMessage(host, timestamp)), key).toString("base64"),
+    [SIGNATURE_V2_HEADER]: signed(signedMessageV2(url.hostname, timestamp)),
+    [SIGNATURE_HEADER]: signed(signedMessage(url.hostname, timestamp)),
   };
 }
 
@@ -100,7 +115,7 @@ const PLUGIN_TEMPLATE = `<?php
  *
  * Install from Plugins → Add New Plugin → Upload Plugin, then Activate. It
  * adds one endpoint, POST /wp-json/website-watch/v1/status, which answers only requests signed by
- * Website Watch for this site within the last few minutes, each one only once.
+ * Website Watch for this site's HTTPS address within the last few minutes, each one only once.
  *
  * Security notes:
  * - No secrets here: WEBSITE_WATCH_PUBLIC_KEY is a public Ed25519 key. The
@@ -124,6 +139,7 @@ if (!defined('WEBSITE_WATCH_HEALTH_VERSION')) {
 	define('WEBSITE_WATCH_HEALTH_VERSION', '__VERSION__');
 	define('WEBSITE_WATCH_PUBLIC_KEY', '__PUBLIC_KEY__');
 	define('WEBSITE_WATCH_MAX_AGE', __MAX_AGE__);
+	define('WEBSITE_WATCH_SIG_PREFIX', 'website_watch_sig_');
 
 	add_action('rest_api_init', function () {
 		register_rest_route('website-watch/v1', '/status', array(
@@ -168,7 +184,7 @@ if (!defined('WEBSITE_WATCH_HEALTH_VERSION')) {
 
 	function website_watch_health_allowed($request) {
 		$key = base64_decode(WEBSITE_WATCH_PUBLIC_KEY, true);
-		$signature = base64_decode((string) $request->get_header('x-website-watch-signature'), true);
+		$signature = base64_decode((string) $request->get_header('x-website-watch-signature-v2'), true);
 		$timestamp = (string) $request->get_header('x-website-watch-timestamp');
 		if ($key === false || strlen($key) !== 32 || $signature === false || strlen($signature) !== 64) {
 			return false;
@@ -181,7 +197,8 @@ if (!defined('WEBSITE_WATCH_HEALTH_VERSION')) {
 			return false;
 		}
 		foreach (website_watch_health_hosts() as $host) {
-			$message = "website-watch-health/v1\\n" . $host . "\\n" . $timestamp;
+			// Website Watch only signs requests to https:// addresses.
+			$message = "website-watch-health/v2\\nhttps://" . $host . "\\n" . $timestamp;
 			try {
 				$valid = sodium_crypto_sign_verify_detached($signature, $message, $key);
 			} catch (Throwable $e) {
@@ -194,14 +211,28 @@ if (!defined('WEBSITE_WATCH_HEALTH_VERSION')) {
 		return false;
 	}
 
-	/** Each signature works once: a captured request can't be replayed. */
+	/**
+	 * Each signature works once: a captured request can't be replayed. The
+	 * database itself refuses a second row with the same (unique) option name,
+	 * so two copies of a request arriving at the same moment can't both pass.
+	 * Only reached with a valid signature, so nobody else can make it write.
+	 */
 	function website_watch_health_first_use($signature) {
-		$seen = 'website_watch_sig_' . md5($signature);
-		if (get_site_transient($seen)) {
-			return false;
-		}
-		set_site_transient($seen, 1, 2 * WEBSITE_WATCH_MAX_AGE);
-		return true;
+		global $wpdb;
+		$now = time();
+		// Forget signatures whose timestamps are too old to be accepted anyway.
+		// Values are 10-digit Unix times, so comparing them as text is safe.
+		$wpdb->query($wpdb->prepare(
+			"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s AND option_value < %s",
+			$wpdb->esc_like(WEBSITE_WATCH_SIG_PREFIX) . '%',
+			(string) ($now - 2 * WEBSITE_WATCH_MAX_AGE)
+		));
+		$inserted = $wpdb->query($wpdb->prepare(
+			"INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+			WEBSITE_WATCH_SIG_PREFIX . md5($signature),
+			(string) $now
+		));
+		return $inserted === 1;
 	}
 
 	function website_watch_health_time($timestamp) {
@@ -228,6 +259,8 @@ if (!defined('WEBSITE_WATCH_HEALTH_VERSION')) {
 	});
 
 	register_deactivation_hook(__FILE__, function () {
+		global $wpdb;
+		$wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name LIKE %s", $wpdb->esc_like(WEBSITE_WATCH_SIG_PREFIX) . '%'));
 		delete_option(WEBSITE_WATCH_FATAL_OPTION);
 		delete_option(WEBSITE_WATCH_MAIL_OPTION);
 		wp_clear_scheduled_hook('website_watch_health_test_email');

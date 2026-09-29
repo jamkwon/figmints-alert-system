@@ -111,6 +111,7 @@ The schema lives in `supabase/migrations/`. Sample data lives in `supabase/seed.
    - `20261006000000_contact_form.sql` (Contact Form monitors)
    - `20261007000000_daily_uptime.sql` (uptime history: per-day totals)
    - `20261008000000_monthly_report_posts.sql` (monthly reports in Slack)
+   - `20261009000000_uptime_speed.sql` (faster uptime numbers)
 3. (Optional) Run `supabase/seed.sql` to load the 6 sample clients. You can re-run it safely; it replaces the earlier sample rows.
 4. Copy the project URL and the secret key into `.env.local`, then restart `npm run dev`.
 
@@ -295,13 +296,14 @@ Extra warnings when it's installed: theme updates, debug errors shown to visitor
 
 **How it stays safe**
 
-- **Never changes the site.** It only reads what WordPress's own update checks already stored. It never updates, installs or changes content or settings, never calls out to other services, and takes no input besides two request headers. It writes only its own notes: a short-lived record of each signature it accepted (to refuse replays), the fatal PHP error log, and the email log (failures and last send; non-autoloaded options, throttled). The only thing it sends is the optional daily test email, to the fixed address built into it (1.3+).
+- **Never changes the site.** It only reads what WordPress's own update checks already stored. It never updates, installs or changes content or settings, never calls out to other services, and takes no input besides two request headers. It writes only its own notes: a short-lived record of each signature it accepted (to refuse replays; cleared after 10 minutes), the fatal PHP error log, and the email log (failures and last send; non-autoloaded options, throttled). The only thing it sends is the optional daily test email, to the fixed address built into it (1.3+).
 - **Signed requests.** Website Watch signs every request with an **Ed25519 private key** that never leaves Website Watch. The plugin holds only the matching **public key**, so the plugin file contains no secret: copying it gives an attacker nothing.
-- **Each signature is tied to one site, one moment, one use.** It covers the site's own domain (taken from WordPress's settings, not the request), and a timestamp the plugin accepts for 5 minutes, and the plugin accepts it only once. A captured request, or one sent to the wrong server (a redirect, an expired domain), is useless on any other site, later, or a second time. Website Watch also never follows redirects with these requests.
+- **Each signature is tied to one site, one moment, one use.** It covers `https://` plus the site's own domain (taken from WordPress's settings, not the request), and a timestamp the plugin accepts for 5 minutes, and the plugin accepts it only once. A captured request, or one sent to the wrong server (a redirect, an expired domain), is useless on any other site, over plain HTTP, later, or a second time. "Only once" is enforced by the database (1.4+): two copies arriving at the same instant can't both get through. Website Watch only contacts the plugin over HTTPS and never follows redirects with these requests.
+- **Updating from 1.3 or older:** Website Watch still sends the older signature too, so older plugins keep working until updated. The monitor page shows when a newer plugin version is available. Download it from Settings and upload it in WordPress (Plugins → Add New Plugin → Upload Plugin → *Replace current with uploaded*).
 - **One narrow endpoint:** `POST /wp-json/website-watch/v1/status`. Everything else gets `401`, GET isn't answered, and responses carry `no-store` so no page cache (including WP Engine's) keeps a report. The endpoint isn't listed in the site's public `/wp-json/` index, and opening the plugin file directly shows nothing.
 - **Never replaced by a stranger's plugin.** It declares `Update URI: false`, so WordPress never offers a wordpress.org plugin with the same folder name as an "update" for it.
 - **Can't break a site by being installed twice.** Two copies (e.g. in different folders) load only once, instead of a PHP "cannot redeclare" crash.
-- **Tested** on WordPress 7.1 / PHP 8.3 and WordPress 6.8 / PHP 7.4 (fatal errors before output, after output and uncaught exceptions are all recorded) against: no or garbage signature, wrong key, tampered signature or timestamp, signatures for another site, 10 minutes old or in the future, replay, oversized headers, GET, and two copies installed. All refused, or handled, as expected.
+- **Tested** on WordPress 7.1 / PHP 8.3 and WordPress 6.8 / PHP 7.4 (fatal errors before output, after output and uncaught exceptions are all recorded) against: no or garbage signature, wrong key, tampered signature or timestamp, signatures for another site or for plain HTTP, the older signature alone, 10 minutes old or in the future, replay (including six copies at once), oversized headers, GET, and two copies installed. All refused, or handled, as expected.
 
 **Setting it up (once)**
 
@@ -484,6 +486,10 @@ An incident is a confirmed problem, not a single failed request. After every che
 - **Titles** describe the failure, e.g. "Contact Page returning HTTP 500", "Expected content missing on Contact Page", "Homepage is unreachable".
 - **Ignored** incidents stay out of the Needs attention list. While one is unresolved, continued failures don't open new incidents. When the site recovers it's closed, but keeps the *Ignored* status so the history shows nobody acted on it.
 - **Only one unresolved incident per monitor.** A database index enforces this, so two checks finishing together can't open duplicates.
+- **Slower monitors confirm quickly.** A monitor that runs less often than every 5 minutes (hourly, daily, weekly…) re-checks within 5 minutes after a first failure, and after a first success while an incident is open, instead of waiting a whole interval.
+- **After a maintenance window ends,** an Expected Maintenance incident that's still failing becomes **Open** (and alerts, if Critical).
+- **Pausing a monitor** closes its unresolved incident ("Closed because the monitor was paused"), since it won't be checked again. Changing a monitor's interval makes it due right away.
+- **If a check itself breaks** (a bug or something unexpected in Website Watch), it's recorded as a Warning ("Website Watch couldn't finish this check: …") rather than retried silently.
 
 ### Incident actions
 
@@ -520,9 +526,9 @@ Filters are part of the URL, so a filtered view can be bookmarked or shared.
 One scheduled worker checks every monitor that's due. There are no per-website cron jobs.
 
 1. Every **5 minutes**, Supabase's built-in scheduler (`pg_cron`) calls `POST /api/cron/run-checks`, authenticated with `CRON_SECRET`.
-2. The endpoint **claims** up to 20 due monitors with the `claim_due_monitors` database function. "Due" means active monitor, website and client, with *next check* now or within the next minute. Claiming locks those monitors for 5 minutes, so overlapping or duplicate calls never check the same monitor twice.
-3. It checks them 5 at a time. Each check is saved, incident rules are applied, and *next check* is set to now + the monitor's interval.
-4. After 20 s the run stops starting new checks (running ones finish; a WordPress Health check can take up to ~35 s), and the monitors it didn't get to are released for the next run. With more than 20 due monitors, the backlog drains over the following runs.
+2. The endpoint **claims** due monitors, 20 at a time, with the `claim_due_monitors` database function. "Due" means active monitor, website and client, with *next check* now or within the next minute. Claiming locks those monitors for 5 minutes, so overlapping or duplicate calls never check the same monitor twice.
+3. It checks them 10 at a time, claiming the next batch as it runs out, up to 150 per run. Each check is saved, incident rules are applied, and *next check* is set to now + the monitor's interval. Slow checks (page speed, link scans, WordPress Health, contact forms) go first and only start early in the run.
+4. After 20 s the run stops starting new checks (running ones finish; a WordPress Health check can take up to ~35 s), and the monitors it didn't get to are released right away for the next run. A bigger backlog drains over the following runs.
 5. **Housekeeping:** every run reopens snoozes that have expired. Once an hour, it deletes check results older than **90 days**.
 
 **Intervals:** 5 min, 15 min, 30 min, 1 hour, 6 hours, daily, weekly, or monthly (every 30 days), enforced by the database (migration `20261005000000_weekly_monthly_intervals.sql` added the last two). Weekly or monthly suits slow-changing checks like domain expiry, page speed or link scans. A new monitor with no *next check* is due right away. Check history is kept 90 days, so a monthly monitor keeps its last three results.
@@ -540,7 +546,7 @@ One scheduled worker checks every monitor that's due. There are no per-website c
 
 ### Checking many sites
 
-Each run checks up to 20 monitors. Every 5 minutes that's about **5,760 checks a day**; every minute, about **28,800**. A monitor every 15 minutes uses 96 a day, every 6 hours 4.
+A run gets through roughly 80 quick checks (more if sites answer fast, fewer with many slow check types). Every 5 minutes that's about **23,000 checks a day**; every minute, about **115,000**. A monitor every 15 minutes uses 96 a day, every 6 hours 4.
 
 For more than ~50 sites, run the scheduler **every minute** by running this once in the Supabase SQL Editor (it only changes the schedule):
 
@@ -610,7 +616,7 @@ Website Watch posts to **one Slack channel**. It's deliberately quiet, so people
 - **Never alerted:** Warnings, Expected Maintenance (including anything that opens during a maintenance window), Snoozed and Ignored incidents. They're on the Dashboard only.
 - **At most one alert per incident.** A resolution message is only sent for incidents that were alerted.
 - **Every alert shows in the incident's History,** as "Slack: alert posted" or "Slack alert failed: …".
-- **A failed alert is retried** on the incident's next change.
+- **A failed alert is retried** on the incident's next change, or on its next failed check if it was never sent.
 
 ### Weekly summary
 
@@ -681,7 +687,7 @@ Staff sign in with **Google**. Only accounts on an allowed domain (`figmints.com
 - **SSRF protection** (`src/lib/monitoring/url-safety.ts`): only `http`/`https` on ports 80, 443, 8080 or 8443; no credentials in URLs; no internal hostnames (`localhost`, `*.local`, single-word names). Every DNS answer is checked **at connection time**, so private, loopback, link-local (including the `169.254.169.254` cloud metadata address), CGNAT, multicast and reserved IPv4/IPv6 addresses are refused, even after a redirect or a DNS change.
 - The Run check action accepts only a monitor ID and always fetches the URL stored in the database. It can't be used to request arbitrary addresses. Only signed-in staff can run it.
 - The scheduler endpoint refuses every request unless `CRON_SECRET` (16+ characters) is set and sent as `Authorization: Bearer …`. The comparison is constant-time. It only checks monitors already in the database.
-- The WordPress plugin's private key stays server-side; sites hold only the public key. Each request is signed for one site, a 5-minute window and one use, and redirects aren't followed.
+- The WordPress plugin's private key stays server-side; sites hold only the public key. Each request is signed for one site's HTTPS address, a 5-minute window and one use, sent only over HTTPS, and redirects aren't followed.
 - WP Engine credentials are used server-side only, for read-only calls to the fixed `api.wpengineapi.com` host.
 - Alerts are only posted to a `hooks.slack.com` webhook from `SLACK_WEBHOOK_URL`. Client names, titles and errors are escaped before they go into Slack formatting.
 - `claim_due_monitors` can only be called with the secret key; execution is revoked from the public `anon` and `authenticated` roles.
