@@ -14,6 +14,8 @@ export const MONITOR_TYPE_LABELS: Record<MonitorType, string> = {
   broken_links: "Broken Links",
   tracking_tags: "Tracking Tags",
   wordpress_health: "WordPress Health",
+  search_visibility: "Search Visibility",
+  domain_expiry: "Domain Expiry",
 };
 
 export const SEVERITY_LABELS: Record<Severity, string> = {
@@ -74,6 +76,8 @@ export const MONITOR_TYPES: readonly MonitorType[] = [
   "broken_links",
   "tracking_tags",
   "wordpress_health",
+  "search_visibility",
+  "domain_expiry",
 ];
 
 /** Availability checks count toward uptime; SSL, link scans, tag and WordPress checks don't (they aren't downtime). */

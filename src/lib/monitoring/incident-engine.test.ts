@@ -135,3 +135,11 @@ test("WordPress PHP errors get their own incident title", () => {
     "PHP errors on WordPress Health",
   );
 });
+
+test("search visibility and domain expiry get their own incident titles", () => {
+  const warning = { ...fail("t", "Domain figmints.com expires in 20 days", null), status: "warning" as const };
+  assert.equal(titleForCheck(fail("t", "Page tells search engines not to index it", 200), "Search Visibility", "search_visibility"), "Search engines blocked on Search Visibility");
+  assert.equal(titleForCheck({ ...warning, error_message: "Canonical URL points to another domain" }, "Search Visibility", "search_visibility"), "Search visibility issue on Search Visibility");
+  assert.equal(titleForCheck(warning, "Domain Expiry", "domain_expiry"), "Domain for Domain Expiry expires soon");
+  assert.equal(titleForCheck(fail("t", "Domain figmints.com expired 2 days ago", null), "Domain Expiry", "domain_expiry"), "Domain problem on Domain Expiry");
+});

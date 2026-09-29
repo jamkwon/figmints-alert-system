@@ -8,7 +8,9 @@ export type MonitorType =
   | "ssl_expiry"
   | "broken_links"
   | "tracking_tags"
-  | "wordpress_health";
+  | "wordpress_health"
+  | "search_visibility"
+  | "domain_expiry";
 export type CheckStatus = "passed" | "failed" | "warning";
 export type Severity = "critical" | "warning" | "informational";
 export type IncidentStatus =

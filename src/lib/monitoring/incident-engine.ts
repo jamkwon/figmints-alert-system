@@ -41,6 +41,14 @@ export function titleForCheck(check: Check, monitorName: string, monitorType?: M
     if (/fatal PHP error/i.test(check.error_message ?? "")) return `PHP errors on ${monitorName}`;
     if (check.status === "warning") return `WordPress updates needed on ${monitorName}`;
   }
+  if (monitorType === "search_visibility") {
+    return check.status === "warning"
+      ? `Search visibility issue on ${monitorName}`
+      : `Search engines blocked on ${monitorName}`;
+  }
+  if (monitorType === "domain_expiry") {
+    return check.status === "warning" ? `Domain for ${monitorName} expires soon` : `Domain problem on ${monitorName}`;
+  }
   if (monitorType === "tracking_tags" && check.error_message?.startsWith("Missing tracking")) {
     return `Tracking tags missing on ${monitorName}`;
   }
