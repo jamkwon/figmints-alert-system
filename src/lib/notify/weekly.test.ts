@@ -55,8 +55,17 @@ test("lists incidents, backups, certificates, WordPress updates, links and tags"
           { slug: "gravityforms", name: "Gravity Forms: Stripe", version: "2.10.2", latest: "3.1.2", source: "plugin" },
           { slug: "akismet", name: "Akismet", version: "5.7.2", latest: null, source: "plugin" },
         ],
-        plugin_report: { themes: [{ slug: "kadence", name: "Kadence", version: "1.2", latest: "1.3", active: true }] },
-        problems: [{ level: "critical", message: "Last completed backup was 60 hours ago" }],
+        plugin_report: {
+          themes: [{ slug: "kadence", name: "Kadence", version: "1.2", latest: "1.3", active: true }],
+          fatal_errors: [
+            { last_at: "2026-09-27T10:00:00Z", count: 2, message: "x", file: "f", line: 1, source: "Gravity Forms" },
+            { last_at: "2026-09-26T10:00:00Z", count: 1, message: "y", file: "g", line: 2, source: "Kadence" },
+          ],
+        },
+        problems: [
+          { level: "critical", message: "Last completed backup was 60 hours ago" },
+          { level: "critical", message: "2 fatal PHP errors in the last 24 hours (Gravity Forms)" },
+        ],
       },
     },
     { ...base, monitorType: "ssl_expiry", metadata: { valid_to: "2026-10-10T00:00:00Z", days_left: 12 } },
@@ -83,6 +92,8 @@ test("lists incidents, backups, certificates, WordPress updates, links and tags"
   assert.doesNotMatch(all, /Old one/, "resolved incidents aren't listed");
   assert.doesNotMatch(all, /WordPress updates needed/, "warnings with their own section aren't repeated as incidents");
   assert.match(all, /Backups.*Last completed backup was 60 hours ago/);
+  assert.doesNotMatch(all, /Backups[^"]*fatal PHP errors/, "only backup problems are listed under Backups");
+  assert.match(all, /PHP errors \(last 7 days\).*3 fatal errors \(Gravity Forms ×2, Kadence ×1\), last Sep 27/);
   assert.match(all, /Blue Finch &lt;Bakery&gt;\* bluefinch\.example \(staging\)/, "names are escaped; staging is marked");
   assert.match(all, /WordPress 7\.0\.5 → 7\.1\.2 · 1 plugin update \(Gravity Forms\) · 1 theme update/);
   assert.match(all, /figmints\.com: expires .* \(12 days\)/);

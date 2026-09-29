@@ -12,7 +12,7 @@ import { createPrivateKey, createPublicKey, sign, type KeyObject } from "node:cr
 import { firstSetEnv } from "../supabase/config.ts";
 import { zipFiles } from "./zip.ts";
 
-export const WP_PLUGIN_VERSION = "1.1.0";
+export const WP_PLUGIN_VERSION = "1.2.0";
 /** Folder and main file name inside the zip, and the plugin's slug. */
 export const WP_PLUGIN_SLUG = "website-watch-health";
 export const WP_PLUGIN_ZIP = `${WP_PLUGIN_SLUG}.zip`;
@@ -96,7 +96,8 @@ const PLUGIN_TEMPLATE = `<?php
  *   private key that signs requests never leaves Website Watch.
  * - Reads only what WordPress's own update checks already stored. It never
  *   updates, installs or changes anything, never calls out, and takes no input
- *   besides the signature headers.
+ *   besides the signature headers. The one thing it records is fatal PHP errors
+ *   (last 7 days, first line of the message, paths relative to the site).
  */
 
 if (!defined('ABSPATH')) {
@@ -195,6 +196,130 @@ if (!defined('WEBSITE_WATCH_HEALTH_VERSION')) {
 		return $timestamp ? gmdate('c', (int) $timestamp) : null;
 	}
 
+	// Fatal PHP errors ---------------------------------------------------------------
+	// WordPress keeps no log of fatal errors, so the plugin records them itself:
+	// the last 7 days, at most 20 distinct errors, in one non-autoloaded option.
+	// WordPress shows its "critical error" page from its own shutdown handler and
+	// then stops PHP, so shutdown functions registered later never run. Record the
+	// error from the wp_php_error_message filter it applies just before that page,
+	// and from our own shutdown function when it doesn't show the page (output had
+	// already started, or its handler is disabled).
+	define('WEBSITE_WATCH_FATAL_OPTION', 'website_watch_health_fatal_errors');
+
+	add_filter('wp_php_error_message', function ($message, $error) {
+		website_watch_health_record_fatal($error);
+		return $message;
+	}, 10, 2);
+
+	register_shutdown_function(function () {
+		website_watch_health_record_fatal(error_get_last());
+	});
+
+	register_deactivation_hook(__FILE__, function () {
+		delete_option(WEBSITE_WATCH_FATAL_OPTION);
+	});
+
+	/** Paths relative to the site ("wp-content/plugins/x/y.php"), so server paths aren't stored. */
+	function website_watch_health_relative_path($path) {
+		$path = wp_normalize_path((string) $path);
+		$content = defined('WP_CONTENT_DIR') ? rtrim(wp_normalize_path(WP_CONTENT_DIR), '/') : '';
+		$root = rtrim(wp_normalize_path(ABSPATH), '/');
+		if ($content !== '' && strpos($path, $content . '/') === 0) {
+			return 'wp-content' . substr($path, strlen($content));
+		}
+		if ($root !== '' && strpos($path, $root . '/') === 0) {
+			return substr($path, strlen($root) + 1);
+		}
+		return basename($path);
+	}
+
+	/** First line only (no stack traces, which can hold arguments), server paths removed, at most 300 characters. */
+	function website_watch_health_clean_message($message) {
+		$lines = preg_split('/\\r\\n|\\r|\\n/', (string) $message);
+		$message = trim((string) $lines[0]);
+		$bases = array(rtrim(ABSPATH, '/'));
+		if (defined('WP_CONTENT_DIR')) {
+			array_unshift($bases, WP_CONTENT_DIR);
+		}
+		$message = str_replace($bases, defined('WP_CONTENT_DIR') ? array('wp-content', '') : array(''), $message);
+		return function_exists('mb_substr') ? mb_substr($message, 0, 300) : substr($message, 0, 300);
+	}
+
+	function website_watch_health_record_fatal($error) {
+		static $recorded = false;
+		$fatal = array(E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR, E_RECOVERABLE_ERROR);
+		if ($recorded || !is_array($error) || !isset($error['type']) || !in_array($error['type'], $fatal, true)) {
+			return;
+		}
+		if (!function_exists('get_option') || !function_exists('update_option')) {
+			return;
+		}
+		$recorded = true;
+		try {
+			$now = time();
+			$log = get_option(WEBSITE_WATCH_FATAL_OPTION, array());
+			if (!is_array($log)) {
+				$log = array();
+			}
+			// At most one write every 10 seconds, so a flood of errors can't flood the database.
+			if (isset($log['written_at']) && $now - (int) $log['written_at'] < 10) {
+				return;
+			}
+			$file = website_watch_health_relative_path(isset($error['file']) ? $error['file'] : '');
+			$line = isset($error['line']) ? (int) $error['line'] : 0;
+			$message = website_watch_health_clean_message(isset($error['message']) ? $error['message'] : '');
+			$key = md5($error['type'] . '|' . $file . '|' . $line . '|' . $message);
+			$errors = isset($log['errors']) && is_array($log['errors']) ? $log['errors'] : array();
+			foreach ($errors as $id => $entry) {
+				if (!is_array($entry) || !isset($entry['last']) || $now - (int) $entry['last'] > 7 * DAY_IN_SECONDS) {
+					unset($errors[$id]);
+				}
+			}
+			if (isset($errors[$key])) {
+				$errors[$key]['count'] = (int) $errors[$key]['count'] + 1;
+				$errors[$key]['last'] = $now;
+			} else {
+				$errors[$key] = array(
+					'first'   => $now,
+					'last'    => $now,
+					'count'   => 1,
+					'type'    => (int) $error['type'],
+					'message' => $message,
+					'file'    => $file,
+					'line'    => $line,
+				);
+			}
+			uasort($errors, function ($a, $b) {
+				return (int) $b['last'] - (int) $a['last'];
+			});
+			update_option(WEBSITE_WATCH_FATAL_OPTION, array('written_at' => $now, 'errors' => array_slice($errors, 0, 20, true)), false);
+		} catch (Throwable $e) {
+			// Never make a failing request worse.
+		}
+	}
+
+	function website_watch_health_fatal_errors() {
+		$log = get_option(WEBSITE_WATCH_FATAL_OPTION, array());
+		$errors = array();
+		if (is_array($log) && isset($log['errors']) && is_array($log['errors'])) {
+			foreach ($log['errors'] as $entry) {
+				if (!is_array($entry)) {
+					continue;
+				}
+				$errors[] = array(
+					'first_at' => website_watch_health_time(isset($entry['first']) ? $entry['first'] : 0),
+					'last_at'  => website_watch_health_time(isset($entry['last']) ? $entry['last'] : 0),
+					'count'    => isset($entry['count']) ? (int) $entry['count'] : 1,
+					'type'     => isset($entry['type']) ? (int) $entry['type'] : 0,
+					'message'  => isset($entry['message']) ? (string) $entry['message'] : '',
+					'file'     => isset($entry['file']) ? (string) $entry['file'] : '',
+					'line'     => isset($entry['line']) ? (int) $entry['line'] : 0,
+				);
+			}
+		}
+		return $errors;
+	}
+
 	function website_watch_health_report() {
 		if (!function_exists('get_plugins')) {
 			require_once ABSPATH . 'wp-admin/includes/plugin.php';
@@ -270,6 +395,9 @@ if (!defined('WEBSITE_WATCH_HEALTH_VERSION')) {
 			'plugins'            => $plugins,
 			'plugins_checked_at' => website_watch_health_time(is_object($plugin_updates) && isset($plugin_updates->last_checked) ? $plugin_updates->last_checked : 0),
 			'themes'             => $themes,
+			'fatal_errors'       => website_watch_health_fatal_errors(),
+			// When WordPress last emailed the admin about a fatal error (at most daily).
+			'recovery_email_at'  => website_watch_health_time((int) get_option('recovery_mode_email_last_sent', 0)),
 		);
 	}
 }

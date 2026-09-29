@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parsePluginReport, wordpressProblems, type WordPressFacts } from "./wordpress.ts";
+import {
+  fatalErrorSource,
+  fatalErrorSourceName,
+  parsePluginReport,
+  wordpressProblems,
+  type WordPressFacts,
+} from "./wordpress.ts";
 import { createPublicKey, generateKeyPairSync, verify } from "node:crypto";
 import {
   SIGNATURE_HEADER,
@@ -122,7 +128,7 @@ test("the downloaded plugin carries only the public key", () => {
   assert.ok(php.includes(`define('WEBSITE_WATCH_PUBLIC_KEY', '${pub}');`));
   const privateDer = privateKey.export({ format: "der", type: "pkcs8" });
   assert.ok(!php.includes(privateDer.subarray(-32).toString("base64")), "the private key is never in the file");
-  assert.ok(!/__[A-Z_]+__/.test(php), "every placeholder is filled in");
+  assert.ok(!/__(PUBLIC_KEY|VERSION|MAX_AGE)__/.test(php), "every placeholder is filled in");
   assert.ok(php.includes(`Version: ${WP_PLUGIN_VERSION}`));
   assert.ok(php.includes(" * Update URI: false\n"), "wordpress.org can never replace it");
   // A second copy must not redeclare functions: every function sits inside the guard.
@@ -137,4 +143,47 @@ test("the downloaded plugin carries only the public key", () => {
   assert.ok(zip.includes(Buffer.from("website-watch-health/website-watch-health.php")), "zip has the folder WordPress expects");
   assert.ok(zip.includes(Buffer.from(php)), "zip holds the same plugin file");
   assert.throws(() => pluginSource("x'); system('id'); //" + "A".repeat(20)), "nothing but a key gets into the PHP");
+});
+
+const FATAL = {
+  first_at: "2026-09-28T10:00:00+00:00",
+  last_at: "2026-09-28T18:00:00+00:00",
+  count: 2,
+  type: 1,
+  message: "Uncaught Error: Call to undefined function boom() in wp-content/plugins/premium-pro/premium-pro.php:7",
+  file: "wp-content/plugins/premium-pro/premium-pro.php",
+  line: 7,
+};
+
+test("fatal PHP errors: parsed, named after their plugin or theme, Critical within 24 hours", () => {
+  const report = parsePluginReport({ ...REPORT, fatal_errors: [FATAL] })!;
+  assert.equal(report.fatalErrors?.length, 1);
+  assert.equal(fatalErrorSourceName(FATAL.file, report), "Premium Pro");
+  assert.deepEqual(wordpressProblems({ ...base, report }, now).map((p) => [p.level, p.message]), [
+    ["critical", "2 fatal PHP errors in the last 24 hours (Premium Pro)"],
+  ]);
+  const old = parsePluginReport({ ...REPORT, fatal_errors: [{ ...FATAL, last_at: "2026-09-26T18:00:00+00:00" }] })!;
+  assert.deepEqual(wordpressProblems({ ...base, report: old }, now), [], "older errors are listed, not alerted");
+});
+
+test("fatal PHP errors: older plugins report nothing, and malformed entries are skipped", () => {
+  assert.equal(parsePluginReport(REPORT)!.fatalErrors, null, "plugin 1.1 has no fatal_errors");
+  assert.deepEqual(parsePluginReport({ ...REPORT, fatal_errors: [] })!.fatalErrors, []);
+  const r = parsePluginReport({ ...REPORT, fatal_errors: ["junk", { file: "x" }, { ...FATAL, count: -5, line: "7" }] })!;
+  assert.equal(r.fatalErrors?.length, 1);
+  assert.equal(r.fatalErrors?.[0].count, 1);
+  assert.equal(r.fatalErrors?.[0].line, 0);
+});
+
+test("fatalErrorSource finds the plugin, theme or core from the path", () => {
+  assert.deepEqual(fatalErrorSource("wp-content/plugins/gravityforms/includes/x.php"), { kind: "plugin", slug: "gravityforms" });
+  assert.deepEqual(fatalErrorSource("wp-content/plugins/hello.php"), { kind: "plugin", slug: "hello" });
+  assert.deepEqual(fatalErrorSource("wp-content/mu-plugins/wpengine-common/x.php"), { kind: "plugin", slug: "wpengine-common" });
+  assert.deepEqual(fatalErrorSource("wp-content/themes/figpress/functions.php"), { kind: "theme", slug: "figpress" });
+  assert.deepEqual(fatalErrorSource("wp-includes/class-wp.php"), { kind: "core", slug: null });
+  assert.deepEqual(fatalErrorSource("index.php"), { kind: "other", slug: null });
+  const report = parsePluginReport(REPORT)!;
+  assert.equal(fatalErrorSourceName("wp-content/themes/twentytwentyfive/functions.php", report), "Twenty Twenty-Five");
+  assert.equal(fatalErrorSourceName("wp-includes/load.php", report), "WordPress core");
+  assert.equal(fatalErrorSourceName("wp-content/plugins/gone/gone.php", report), "plugin gone");
 });

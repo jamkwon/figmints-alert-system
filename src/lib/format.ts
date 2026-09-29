@@ -144,6 +144,17 @@ export function trackingInfo(metadata: Record<string, unknown> | null | undefine
   return { found, expected, missing: expected.filter((t) => !found[t]) };
 }
 
+export interface WordPressFatalError {
+  first_at: string | null;
+  last_at: string | null;
+  count: number;
+  message: string;
+  file: string;
+  line: number;
+  /** Plugin or theme name, or "WordPress core". */
+  source: string;
+}
+
 export interface WordPressInfo {
   version: string | null;
   latest: string | null;
@@ -157,6 +168,8 @@ export interface WordPressInfo {
     updates_checked_at: string | null;
     memory_limit: string | null;
     themes: { slug: string; name: string; version: string | null; latest: string | null; active: boolean }[];
+    /** Last 7 days, newest first; null or missing when the site's plugin is older than 1.2. */
+    fatal_errors?: WordPressFatalError[] | null;
   } | null;
   pluginNote: string | null;
   wpengine: {
