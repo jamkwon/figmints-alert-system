@@ -54,7 +54,8 @@ const agent = new Agent({
 
 // The WordPress plugin's report can't be cached (it's a signed POST), so it
 // always pays WordPress's full start-up time, which is slow on some sites
-// (13 s+ on some WP Engine staging installs). Give it more room.
+// (13 s+ on some WP Engine staging installs). Give it more room; contact form
+// pages, often left uncached, get the same.
 const PLUGIN_TIMEOUT_MS = 20_000;
 const pluginAgent = new Agent({
   connect: { lookup: safeLookup, timeout: 10_000 },
@@ -973,20 +974,27 @@ export async function performContactFormCheck(monitor: Monitor): Promise<HttpChe
     }),
     metadata,
   });
+  // Ask the site plugin while the page loads: both can be slow on uncached pages
+  // (form pages often are), and one after the other could outlast a scheduler run.
+  const signingKey = pluginKey();
+  const targetOrigin = new URL(monitor.target_url).origin;
+  const earlyPlugin = signingKey ? pluginReportFor(targetOrigin, signingKey) : null;
   let page: { response: Response; url: URL };
   let html: string;
   try {
-    page = await safeFetch(validateTargetUrl(monitor.target_url), { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    page = await safeFetch(validateTargetUrl(monitor.target_url), {
+      signal: AbortSignal.timeout(PLUGIN_TIMEOUT_MS),
+      dispatcher: pluginAgent,
+    });
     html = (await readBody(page.response)).text;
   } catch (err) {
-    return pageFailed({ error: describeFetchError(err) });
+    return pageFailed({ error: describeFetchError(err, PLUGIN_TIMEOUT_MS) });
   }
   const elapsed = performance.now() - started;
   if (!isExpectedStatus(page.response.status, null)) {
     return pageFailed({ httpStatus: page.response.status, statusText: page.response.statusText, responseTimeMs: elapsed });
   }
   const findings = detectForms(html);
-  const signingKey = pluginKey();
   const scriptUrl = findings.embeds.find((e) => e.scriptUrl)?.scriptUrl ?? null;
   const hubspotChecks = findings.embeds.flatMap((e) => {
     const url = hubspotDefinitionUrl(e);
@@ -1001,7 +1009,8 @@ export async function performContactFormCheck(monitor: Monitor): Promise<HttpChe
           })
           .catch(() => false)
       : null,
-    signingKey ? pluginReportFor(page.url.origin, signingKey) : null,
+    // The plugin signs for one host: if the page redirected elsewhere (e.g. to www.), ask there.
+    signingKey && page.url.origin !== targetOrigin ? pluginReportFor(page.url.origin, signingKey) : earlyPlugin,
     Promise.all(
       hubspotChecks.map(async ({ id, url }) => {
         try {

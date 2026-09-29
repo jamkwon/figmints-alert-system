@@ -88,7 +88,6 @@ export function CheckStatusBadge({ status, monitorType }: { status: CheckStatus;
                 : label;
   if (status === "failed" && monitorType === "tracking_tags") return <HealthBadge health={health} label="Tags missing" />;
   if (status === "failed" && monitorType === "search_visibility") return <HealthBadge health={health} label="Hidden from search" />;
-  if (status === "failed" && monitorType === "contact_form") return <HealthBadge health={health} label="Form or email broken" />;
   return <HealthBadge health={health} label={status === "warning" ? warningLabel : label} />;
 }
 

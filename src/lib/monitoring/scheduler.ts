@@ -7,8 +7,8 @@ import { getSupabase } from "@/lib/supabase/server";
 import type { Monitor } from "@/lib/types";
 
 // Sized so one run finishes inside a 60 s function limit: 20 monitors, 5 at a
-// time. Most checks are capped at 15 s; a WordPress Health check can take up to
-// ~35 s (the page, then the site plugin's report, which gets 20 s).
+// time. Most checks are capped at 15 s; WordPress Health and Contact Form checks
+// can take up to ~35 s (the page, the site plugin's report and HubSpot).
 export const MAX_MONITORS_PER_RUN = 20;
 const CONCURRENCY = 5;
 // Stop starting new checks after this (20 s + a 35 s check still ends before
