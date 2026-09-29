@@ -3,6 +3,7 @@
 // so everything here can be tested directly.
 import { DEFAULT_SETTINGS, type AppSettings } from "../settings.ts";
 import type { CheckOutcome } from "./evaluate.ts";
+import type { MailHealth } from "./forms.ts";
 
 // Public signals ------------------------------------------------------------------
 
@@ -196,6 +197,8 @@ export interface PluginReport {
   plugins: PluginReportItem[];
   pluginsCheckedAt: string | null;
   themes: PluginReportItem[];
+  /** The site's email: failures, last sent, daily test; null when the plugin is older than 1.3. */
+  mail: MailHealth | null;
   /** Fatal PHP errors from the last 7 days; null when the plugin is older than 1.2. */
   fatalErrors: FatalError[] | null;
 }
@@ -236,6 +239,28 @@ export function parsePluginReport(body: unknown): PluginReport | null {
     pluginsCheckedAt: text(r.plugins_checked_at, 40),
     themes: reportItems(r.themes, "slug"),
     fatalErrors: Array.isArray(r.fatal_errors) ? fatalErrors(r.fatal_errors) : null,
+    mail: "mail" in r ? mailHealth(r.mail) : null,
+  };
+}
+
+function mailHealth(v: unknown): MailHealth {
+  const m = obj(v);
+  const test = obj(m.test);
+  return {
+    failures: (Array.isArray(m.failures) ? m.failures : []).slice(0, 50).flatMap((raw) => {
+      const f = obj(raw);
+      const message = text(f.message, 300);
+      if (!message) return [];
+      const count = typeof f.count === "number" && Number.isFinite(f.count) ? Math.max(1, Math.round(f.count)) : 1;
+      return [{ lastAt: text(f.last_at, 40), count, message }];
+    }),
+    lastSentAt: text(m.last_sent_at, 40),
+    test: {
+      configured: test.configured === true,
+      lastAt: text(test.last_at, 40),
+      ok: typeof test.ok === "boolean" ? test.ok : null,
+      error: text(test.error, 300),
+    },
   };
 }
 

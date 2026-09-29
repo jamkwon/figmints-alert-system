@@ -128,7 +128,7 @@ test("the downloaded plugin carries only the public key", () => {
   assert.ok(php.includes(`define('WEBSITE_WATCH_PUBLIC_KEY', '${pub}');`));
   const privateDer = privateKey.export({ format: "der", type: "pkcs8" });
   assert.ok(!php.includes(privateDer.subarray(-32).toString("base64")), "the private key is never in the file");
-  assert.ok(!/__(PUBLIC_KEY|VERSION|MAX_AGE)__/.test(php), "every placeholder is filled in");
+  assert.ok(!/__(PUBLIC_KEY|VERSION|MAX_AGE|TEST_EMAIL)__/.test(php), "every placeholder is filled in");
   assert.ok(php.includes(`Version: ${WP_PLUGIN_VERSION}`));
   assert.ok(php.includes(" * Update URI: false\n"), "wordpress.org can never replace it");
   // A second copy must not redeclare functions: every function sits inside the guard.
