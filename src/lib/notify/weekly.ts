@@ -1,6 +1,6 @@
 // Weekly summary: one Slack message every Monday morning listing what needs
-// work across all sites (open incidents, backups, certificates, WordPress
-// updates, broken links, missing tags). Pure (relative imports only) so it can
+// work across all sites (open incidents, backups, PHP errors, certificates,
+// WordPress updates, broken links, missing tags). Pure (relative imports only) so it can
 // be tested directly. Scheduling and sending live in weekly-send.ts.
 import { certificateInfo, formatDate, linkScanInfo, trackingInfo, wordpressInfo } from "../format.ts";
 import { countsTowardUptime } from "../labels.ts";
@@ -156,6 +156,7 @@ export function buildWeeklySummary({ monitors, incidents, now, appUrl }: Summary
   );
 
   const backupLines: string[] = [];
+  const phpLines: { line: string; total: number }[] = [];
   const wordpressLines: { line: string; weight: number }[] = [];
   const sslLines: { line: string; days: number }[] = [];
   const linkLines: string[] = [];
@@ -165,7 +166,21 @@ export function buildWeeklySummary({ monitors, incidents, now, appUrl }: Summary
     if (m.monitorType === "wordpress_health") {
       const wp = wordpressInfo(m.metadata);
       if (!wp) continue;
-      for (const p of wp.problems.filter((p) => p.level === "critical")) backupLines.push(`${site(m)}: ${esc(p.message)}`);
+      for (const p of wp.problems.filter((p) => p.level === "critical" && /backup/i.test(p.message))) {
+        backupLines.push(`${site(m)}: ${esc(p.message)}`);
+      }
+      const fatal = wp.report?.fatal_errors ?? [];
+      if (fatal.length > 0) {
+        const total = fatal.reduce((n, e) => n + e.count, 0);
+        const bySource = new Map<string, number>();
+        for (const e of fatal) bySource.set(e.source, (bySource.get(e.source) ?? 0) + e.count);
+        const sources = [...bySource].map(([name, n]) => `${esc(name)} ×${n}`).join(", ");
+        const last = fatal.map((e) => e.last_at ?? "").sort().at(-1);
+        phpLines.push({
+          line: `${site(m)}: ${plural(total, "fatal error")} (${sources})${last ? `, last ${formatDate(last)}` : ""}`,
+          total,
+        });
+      }
       const parts: string[] = [];
       let weight = 0;
       if (wp.version && wp.latest && compareVersions(wp.version, wp.latest) < 0) {
@@ -206,6 +221,10 @@ export function buildWeeklySummary({ monitors, incidents, now, appUrl }: Summary
   const sections = [
     section(":rotating_light: *Needs attention now*", incidentLines),
     section(":floppy_disk: *Backups*", backupLines),
+    section(
+      ":boom: *PHP errors (last 7 days)*",
+      phpLines.sort((a, b) => b.total - a.total).map((l) => l.line),
+    ),
     section(
       `:lock: *SSL certificates expiring within ${SUMMARY_SSL_DAYS} days*`,
       sslLines.sort((a, b) => a.days - b.days).map((l) => l.line),

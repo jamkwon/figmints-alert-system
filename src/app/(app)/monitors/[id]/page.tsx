@@ -276,6 +276,42 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
                       )}
                     </div>
                   )}
+                  {wp.report && (
+                    <div className="border-t border-slate-100 px-4 py-3">
+                      <div className="mb-1 text-xs font-medium tracking-wide text-slate-500 uppercase">
+                        PHP errors (last 7 days)
+                      </div>
+                      {!wp.report.fatal_errors ? (
+                        <p className="text-xs text-slate-500">
+                          Update the Website Watch plugin on this site (Settings → WordPress plugin) to track PHP errors.
+                        </p>
+                      ) : wp.report.fatal_errors.length === 0 ? (
+                        <p className="text-xs text-slate-500">None recorded.</p>
+                      ) : (
+                        <ul className="space-y-2 text-xs">
+                          {wp.report.fatal_errors.map((e, i) => (
+                            <li key={i}>
+                              <div className="flex justify-between gap-2">
+                                <span className="font-medium text-red-700">{e.source}</span>
+                                <span className="shrink-0 text-slate-500">
+                                  {e.count > 1 && <>×{e.count} · </>}
+                                  {e.last_at ? timeAgo(e.last_at) : ""}
+                                </span>
+                              </div>
+                              <div className="break-words text-fig-ink">{e.message}</div>
+                              {/* PHP messages usually end with "in file:line" already. */}
+                              {e.file && !e.message.includes(e.file) && (
+                                <div className="text-slate-500">
+                                  {e.file}
+                                  {e.line > 0 && `:${e.line}`}
+                                </div>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
                 </>
               )}
             </Panel>

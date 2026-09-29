@@ -277,13 +277,25 @@ export function buildSampleData(now: Date = new Date()): {
         : [{ slug: "wordpress-seo", version: null, latest: null, source: "rest" }],
       plugin_report: blueFinch
         ? {
-            plugin_version: "1.0.0",
+            plugin_version: "1.2.0",
             generated_at: check.checked_at,
             updates_checked_at: ago(300),
             memory_limit: "256M",
             debug_display: false,
             cron_overdue_minutes: 0,
             themes: [{ slug: "kadence", name: "Kadence", version: "1.2.9", latest: null, active: true }],
+            fatal_errors: [
+              {
+                first_at: ago(4400),
+                last_at: ago(4300),
+                count: 3,
+                message:
+                  "Uncaught Error: Call to undefined function gf_apply_filters() in wp-content/plugins/gravityformsstripe/class-gf-stripe.php:1203",
+                file: "wp-content/plugins/gravityformsstripe/class-gf-stripe.php",
+                line: 1203,
+                source: "Gravity Forms Stripe Add-On",
+              },
+            ],
           }
         : null,
       plugin_note: blueFinch ? "Reported by the Website Watch plugin" : "Website Watch plugin not installed or not active",
