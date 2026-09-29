@@ -428,7 +428,7 @@ One scheduled worker checks every monitor that's due. There are no per-website c
 1. Every **5 minutes**, Supabase's built-in scheduler (`pg_cron`) calls `POST /api/cron/run-checks`, authenticated with `CRON_SECRET`.
 2. The endpoint **claims** up to 20 due monitors with the `claim_due_monitors` database function. "Due" means active monitor, website and client, with *next check* now or within the next minute. Claiming locks those monitors for 5 minutes, so overlapping or duplicate calls never check the same monitor twice.
 3. It checks them 5 at a time. Each check is saved, incident rules are applied, and *next check* is set to now + the monitor's interval.
-4. If time runs short (40 s), the remaining claimed monitors are picked up by the next run. With more than 20 due monitors, the backlog drains over the following runs.
+4. After 20 s the run stops starting new checks (running ones finish; a WordPress Health check can take up to ~35 s), and the monitors it didn't get to are released for the next run. With more than 20 due monitors, the backlog drains over the following runs.
 5. **Housekeeping:** every run reopens snoozes that have expired. Once an hour, it deletes check results older than **90 days**.
 
 **Intervals:** 5 min, 15 min, 30 min, 1 hour, 6 hours, or daily (enforced by the database). A new monitor with no *next check* is due right away.

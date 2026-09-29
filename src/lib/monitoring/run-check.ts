@@ -46,6 +46,16 @@ const agent = new Agent({
   bodyTimeout: TIMEOUT_MS,
 });
 
+// The WordPress plugin's report can't be cached (it's a signed POST), so it
+// always pays WordPress's full start-up time, which is slow on some sites
+// (13 s+ on some WP Engine staging installs). Give it more room.
+const PLUGIN_TIMEOUT_MS = 20_000;
+const pluginAgent = new Agent({
+  connect: { lookup: safeLookup, timeout: 10_000 },
+  headersTimeout: PLUGIN_TIMEOUT_MS,
+  bodyTimeout: PLUGIN_TIMEOUT_MS,
+});
+
 export interface CheckMetadata {
   final_url?: string;
   redirects?: number;
@@ -89,12 +99,12 @@ async function readBody(response: Response): Promise<{ text: string; bytes: numb
 type ErrorWithCode = Error & { code?: string; cause?: unknown };
 
 /** Turns network/TLS/timeout errors into a short message a non-developer can read. */
-export function describeFetchError(err: unknown): string {
+export function describeFetchError(err: unknown, timeoutMs = TIMEOUT_MS): string {
   let current: unknown = err;
   for (let depth = 0; current instanceof Error && depth < 5; depth++) {
     const e = current as ErrorWithCode;
     if (e instanceof UnsafeUrlError) return e.message;
-    if (e.name === "TimeoutError" || e.name === "AbortError") return `Timed out after ${TIMEOUT_MS / 1000} s`;
+    if (e.name === "TimeoutError" || e.name === "AbortError") return `Timed out after ${timeoutMs / 1000} s`;
     if (e.name === "TooManyRedirectsError") return e.message;
     switch (e.code) {
       case "ENOTFOUND":
@@ -109,7 +119,7 @@ export function describeFetchError(err: unknown): string {
         return "Connection timed out";
       case "UND_ERR_HEADERS_TIMEOUT":
       case "UND_ERR_BODY_TIMEOUT":
-        return `Timed out after ${TIMEOUT_MS / 1000} s`;
+        return `Timed out after ${timeoutMs / 1000} s`;
       case "CERT_HAS_EXPIRED":
         return "SSL certificate has expired";
       case "ERR_TLS_CERT_ALTNAME_INVALID":
@@ -148,6 +158,8 @@ async function safeFetch(
     accept?: string;
     /** Extra request headers. Don't combine secrets with followRedirects, or they'd go to the redirect target. */
     headers?: Record<string, string>;
+    /** Connection pool with different timeouts (it must use safeLookup too). */
+    dispatcher?: Agent;
   },
 ): Promise<{ response: Response; url: URL; redirects: number }> {
   let url = start;
@@ -155,7 +167,7 @@ async function safeFetch(
   while (true) {
     const response = await fetch(url, {
       method: options.method ?? "GET",
-      dispatcher: agent,
+      dispatcher: options.dispatcher ?? agent,
       redirect: "manual",
       signal: options.signal,
       headers: {
@@ -512,7 +524,8 @@ async function fetchPluginReport(origin: string, key: KeyObject): Promise<{ repo
   try {
     const { response } = await safeFetch(validateTargetUrl(origin + WP_PLUGIN_ROUTE), {
       method: "POST",
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(PLUGIN_TIMEOUT_MS),
+      dispatcher: pluginAgent,
       followRedirects: false,
       accept: "application/json",
       headers: signRequest(key, new URL(origin).hostname),
@@ -544,7 +557,7 @@ async function fetchPluginReport(origin: string, key: KeyObject): Promise<{ repo
           : `Plugin report failed (HTTP ${response.status})`,
     };
   } catch (err) {
-    return { report: null, note: `Couldn't reach the Website Watch plugin: ${describeFetchError(err)}` };
+    return { report: null, note: `Couldn't reach the Website Watch plugin: ${describeFetchError(err, PLUGIN_TIMEOUT_MS)}` };
   }
 }
 
@@ -582,12 +595,29 @@ export async function performWordPressCheck(monitor: Monitor): Promise<HttpCheck
 
   const origin = page.url.origin;
   const signingKey = pluginKey();
-  const [feed, restIndex, latestCore, pluginResult] = await Promise.all([
+  const finalHost = page.url.hostname;
+
+  // WP Engine: install details and backups for the install serving this domain.
+  async function lookupWpEngine(): Promise<{ install: WpeInstall | null; backups: BackupStatus | null; error: string | null }> {
+    if (!isWpeConfigured()) return { install: null, backups: null, error: null };
+    try {
+      const installs = await listInstalls();
+      const install = matchInstall(installs, finalHost) ?? matchInstall(installs, new URL(monitor.target_url).hostname);
+      return { install, backups: install ? summarizeBackups(await listBackups(install.id)) : null, error: null };
+    } catch (err) {
+      return { install: null, backups: null, error: err instanceof Error ? err.message : "WP Engine API request failed" };
+    }
+  }
+
+  // All at once, so a slow site and a slow API don't add up.
+  const [feed, restIndex, latestCore, pluginResult, wpe] = await Promise.all([
     fetchOptionalText(`${origin}/feed/`),
     fetchOptionalText(`${origin}/wp-json/`),
     latestCoreVersion(),
     signingKey ? fetchPluginReport(origin, signingKey) : null,
+    lookupWpEngine(),
   ]);
+  const { install, backups, error: wpengineError } = wpe;
   const report = pluginResult?.report ?? null;
   let namespaces: string[] | null = null;
   try {
@@ -597,20 +627,6 @@ export async function performWordPressCheck(monitor: Monitor): Promise<HttpCheck
     namespaces = null;
   }
   const signals = detectWordPress(html, feed, namespaces);
-
-  // WP Engine: install details and backups for the install serving this domain.
-  let install: WpeInstall | null = null;
-  let backups: BackupStatus | null = null;
-  let wpengineError: string | null = null;
-  if (isWpeConfigured()) {
-    try {
-      const installs = await listInstalls();
-      install = matchInstall(installs, page.url.hostname) ?? matchInstall(installs, new URL(monitor.target_url).hostname);
-      if (install) backups = summarizeBackups(await listBackups(install.id));
-    } catch (err) {
-      wpengineError = err instanceof Error ? err.message : "WP Engine API request failed";
-    }
-  }
 
   // The plugin knows every plugin and its update (premium included). Without it,
   // compare plugins whose version the page reveals with wordpress.org.
