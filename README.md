@@ -24,6 +24,7 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 - **Page speed: done.** A *Page Speed* monitor runs Google PageSpeed Insights (mobile) daily and warns when the performance score drops below a minimum or real visitors' Core Web Vitals fail. See **Page speed**.
 - **Monthly client report: done.** A printable report per client and month (uptime, incidents, WordPress work done, page speed, security). See **Monthly report**.
 - **Contact form checks: done.** A *Contact Form* monitor fails when a page's form is missing or broken (any form tool), or when the site's emails fail to send (WordPress plugin 1.3+). See **Contact forms**.
+- **Trends and automatic reports: done.** 90-day **uptime history** bars (monitor and client pages, and daily bars in the monthly report), a **page speed trend** chart with a warning on sharp drops, and last month's client reports **posted to Slack on the 1st**. See **Uptime history**, **Page speed** and **Monthly report**.
 
 Running checks and updating incidents require Supabase. On sample data those controls are disabled.
 
@@ -108,6 +109,8 @@ The schema lives in `supabase/migrations/`. Sample data lives in `supabase/seed.
    - `20261004000000_page_speed.sql` (Page Speed monitors; minimum score setting)
    - `20261005000000_weekly_monthly_intervals.sql` (Weekly and Monthly check intervals)
    - `20261006000000_contact_form.sql` (Contact Form monitors)
+   - `20261007000000_daily_uptime.sql` (uptime history: per-day totals)
+   - `20261008000000_monthly_report_posts.sql` (monthly reports in Slack)
 3. (Optional) Run `supabase/seed.sql` to load the 6 sample clients. You can re-run it safely; it replaces the earlier sample rows.
 4. Copy the project URL and the secret key into `.env.local`, then restart `npm run dev`.
 
@@ -167,7 +170,7 @@ src/
     health.ts           Health rules: monitor → website → client roll-up
     validation.ts       Form parsing/validation (SSRF-safe URLs, bulk monitor lines)
     notify/             Alerts: rules and Slack message format (alerts.ts), sending (send.ts),
-                        weekly summary (weekly.ts, weekly-send.ts)
+                        weekly summary (weekly.ts, weekly-send.ts), monthly reports (monthly.ts, monthly-send.ts)
     monitoring/
       run-check.ts      Performs one HTTP check (redirects, timeout, body limit, error messages)
       evaluate.ts       Pure pass/fail rules for a check (HTTP and SSL)
@@ -182,6 +185,7 @@ src/
       pagespeed.ts      Google PageSpeed Insights: score, lab and real-user metrics, rules
       forms.ts          Contact forms on a page (any builder) and the site's email health
     report.ts           Monthly client report: months, uptime, incidents, WordPress work done
+    uptime-history.ts   Per-day uptime bars (90 days, or a report's month)
       url-safety.ts     SSRF protection
       incident-engine.ts Pure rules: when to open, update or resolve an incident
       record.ts         Runs a check, saves the result, applies incident rules
@@ -388,6 +392,10 @@ A **Page Speed** monitor runs **Google PageSpeed Insights** on a page once a day
 - **Lab test (Lighthouse):** the 0–100 performance score, and load timings (Largest Contentful Paint, First Contentful Paint, Total Blocking Time, Cumulative Layout Shift). **Warning** when the score is below the minimum in **Settings → Monitoring rules** (default 50).
 - **Real visitors (Chrome UX Report):** Core Web Vitals (LCP, INP, CLS) at the 75th percentile over the last 28 days, for the page or, with less traffic, the whole site. **Warning** when the assessment fails (any of them not "good"). Low-traffic sites may have no real-visitor data; then only the lab test counts.
 
+- **Sharp drop:** **Warning** when the score is at least **15 points** below its median over the previous 7 days, e.g. "Score dropped to 48 from about 66 last week" (Lighthouse scores wobble by a few points, so smaller changes are ignored).
+
+The monitor page has a **score trend** chart for the last 90 days, with Google's good / needs work / poor bands and the minimum from Settings.
+
 It **never fails or alerts on Slack**: a slow page isn't an outage. Warnings show on the dashboard and in the **weekly summary** (*Page speed*). The monitor page shows the score, timings, real-visitor results, the three biggest suggested fixes, and a link to Google's full report.
 
 - **Adding one:** tick **Also test the homepage's speed with Google PageSpeed** on **Add client** or **Add monitors**, or add a *Page Speed* monitor for any page. Daily.
@@ -551,15 +559,21 @@ Runs never overlap on the same monitor (see *claims* above), so this is safe. **
 curl -X POST http://localhost:3000/api/cron/run-checks -H "Authorization: Bearer $CRON_SECRET"
 ```
 
+## Uptime history
+
+Page-load monitors (HTTP status, expected content, response time) show a **bar for each of the last 90 days**, like public status pages: on each monitor's page, per website on the client page, and per day of the month in the monthly report. Colors: up all day, brief problems (99% or more), degraded (95% or more), down for part of the day, or no checks; hover a bar for that day's numbers. Days are counted in the database (`daily_uptime`, migration `20261007000000_daily_uptime.sql`) in `APP_TIMEZONE`, so the app doesn't load every check. History is kept 90 days.
+
 ## Monthly report
 
 Each client has a **Monthly report** (client page → **Monthly report**): one printable page summarizing a calendar month (`APP_TIMEZONE`) to send to the client or use in account reviews. **Print / Save as PDF** hides the app around it.
 
 - **Overview:** uptime (page-load checks), incidents opened, average time to resolve, and WordPress updates made.
-- **Uptime by website** and **incidents** (what happened, severity, when, how long it took to fix).
+- **Uptime by website**, with a bar for each day of the month, and **incidents** (what happened, severity, when, how long it took to fix).
 - **WordPress maintenance**, per site: core and plugin/theme updates made during the month, backups, PHP errors, and updates still pending. Updates are worked out by comparing versions at the start and end of the month, so nobody has to log them. With the Website Watch plugin every update is listed (compared from the first check that had its full list); without it, only what's visible from outside.
 - **Page speed:** latest score and the month's range and average.
 - **Security and visibility:** SSL certificate and domain renewal dates, and whether search engines could index the site all month.
+
+**Posted to Slack on the 1st:** at the weekly summary's hour (Settings → Monitoring rules), one message lists every active client with its uptime, incidents and WordPress updates for the month that just ended, and links to each report (clients needing a look first, marked :large_orange_circle:: uptime under 99.9%, backups, PHP errors, search or form problems). If the scheduler was down, it's posted within 24 hours. It's claimed in `monthly_report_posts` so it's posted once, and can be turned off in Settings. **Settings → Alerts → Post last month's reports now** posts it on demand. With many clients, up to 40 are listed, then "…and N more".
 
 Sections without monitors are left out. **Months:** the current one ("so far") and the two before it; check history is kept 90 days. The page opens on last month, the one to send at the start of a month. It's for staff only (it needs sign-in); clients get the PDF.
 
