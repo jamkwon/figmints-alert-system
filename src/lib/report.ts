@@ -153,6 +153,8 @@ export interface MonthlyReport {
   ssl: { website: string; validTo: string }[];
   domains: { domain: string; expiresAt: string; registrar: string | null }[];
   visibility: { website: string; checks: number; problems: number; latestProblem: string | null }[];
+  /** Contact form checks: how many found the form or email broken. */
+  forms: { website: string; page: string; checks: number; problems: number; latestProblem: string | null }[];
 }
 
 // Building ----------------------------------------------------------------------------
@@ -343,6 +345,13 @@ export function buildMonthlyReport(input: ReportInput): MonthlyReport {
     return [{ website: label(m), checks: all.length, problems: bad.length, latestProblem: bad.at(-1)?.errorMessage ?? null }];
   });
 
+  const forms = byType("contact_form").flatMap((m) => {
+    const all = checksFor(m.id);
+    if (all.length === 0) return [];
+    const bad = all.filter((c) => c.status === "failed");
+    return [{ website: label(m), page: m.name, checks: all.length, problems: bad.length, latestProblem: bad.at(-1)?.errorMessage ?? null }];
+  });
+
   return {
     month,
     inProgress: input.now.getTime() < month.end.getTime(),
@@ -361,5 +370,6 @@ export function buildMonthlyReport(input: ReportInput): MonthlyReport {
     ssl,
     domains,
     visibility,
+    forms,
   };
 }

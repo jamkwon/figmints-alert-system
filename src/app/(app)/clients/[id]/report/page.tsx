@@ -361,7 +361,7 @@ export default async function MonthlyReportPage({ params, searchParams }: PagePr
         </Section>
       )}
 
-      {(r.ssl.length > 0 || r.domains.length > 0 || r.visibility.length > 0) && (
+      {(r.ssl.length > 0 || r.domains.length > 0 || r.visibility.length > 0 || r.forms.length > 0) && (
         <Section title="Security and visibility" accent="bg-fig-teal">
           <dl className="divide-y divide-slate-100 text-sm">
             {r.ssl.map((s) => (
@@ -378,6 +378,23 @@ export default async function MonthlyReportPage({ params, searchParams }: PagePr
                 <dd>
                   <Pill tone={renewalTone(d.expiresAt)}>Registered until {formatDate(d.expiresAt)}</Pill>
                   {d.registrar && <span className="ml-2 text-xs text-slate-500">{d.registrar}</span>}
+                </dd>
+              </div>
+            ))}
+            {r.forms.map((f) => (
+              <div key={`form-${f.website}-${f.page}`} className="grid grid-cols-[16rem_1fr] items-center gap-4 px-4 py-3">
+                <dt className="text-slate-600">Contact form · {f.website}</dt>
+                <dd>
+                  {f.problems === 0 ? (
+                    <Pill tone="good">Form and email working all month</Pill>
+                  ) : (
+                    <>
+                      <Pill tone="poor">
+                        {f.problems} of {f.checks} checks found a problem
+                      </Pill>
+                      {f.latestProblem && <span className="mt-1 block text-xs text-slate-500">{f.latestProblem}</span>}
+                    </>
+                  )}
                 </dd>
               </div>
             ))}

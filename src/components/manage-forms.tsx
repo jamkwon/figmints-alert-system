@@ -238,6 +238,8 @@ const TYPE_HELP: Record<MonitorType, string> = {
     "Checks when the domain's registration expires (from its registry): warning at 30 days left, failed at 7. Only the domain of the URL is used.",
   page_speed:
     "Google PageSpeed (mobile): warns when the performance score is below the minimum in Settings, or real visitors' Core Web Vitals fail. Needs PAGESPEED_API_KEY.",
+  contact_form:
+    "Use the contact page's URL. Fails when the form is missing or broken (any form tool), or, with the Website Watch plugin, when the site's emails fail to send. Never submits the form.",
 };
 
 const SEVERITY_HELP: Partial<Record<MonitorType, string>> = {
@@ -249,6 +251,7 @@ const SEVERITY_HELP: Partial<Record<MonitorType, string>> = {
   search_visibility: "Applies when search engines are blocked. A robots.txt error or a canonical on another domain is a Warning.",
   domain_expiry: "Applies at 7 days left or when expired. 30 days left is a Warning.",
   page_speed: "Page speed only ever warns: a slow page isn't an outage.",
+  contact_form: "Critical by default: a broken form or failing email loses leads.",
 };
 
 const INTERVAL_HINT: Partial<Record<MonitorType, string>> = {
@@ -259,6 +262,7 @@ const INTERVAL_HINT: Partial<Record<MonitorType, string>> = {
   search_visibility: "Every 6 hours catches a noindex pushed from staging the same day.",
   domain_expiry: "Daily is plenty: expiry dates change slowly.",
   page_speed: "Daily is plenty (each test takes up to 45 s and uses Google's quota).",
+  contact_form: "Every 6 hours or hourly: email failures are caught as soon as the next check runs.",
 };
 
 /** Types with their own pass/fail rules, where the page settings (expected status, text, time) don't apply. */
@@ -270,6 +274,7 @@ const OWN_RULES: MonitorType[] = [
   "search_visibility",
   "domain_expiry",
   "page_speed",
+  "contact_form",
 ];
 
 /** Defaults for a brand-new monitor. */

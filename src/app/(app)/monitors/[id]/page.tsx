@@ -17,6 +17,7 @@ import {
   domainExpiryInfo,
   pageSpeedInfo,
   formatSeconds,
+  contactFormInfo,
   formatDate,
   formatDateTime,
   formatUptime,
@@ -76,6 +77,8 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
   const isVisibility = monitor.monitor_type === "search_visibility";
   const isDomain = monitor.monitor_type === "domain_expiry";
   const isSpeed = monitor.monitor_type === "page_speed";
+  const isForm = monitor.monitor_type === "contact_form";
+  const form = isForm ? contactFormInfo(summary?.last_metadata) : null;
   const speed = isSpeed ? pageSpeedInfo(summary?.last_metadata) : null;
   const vis = isVisibility ? visibilityInfo(summary?.last_metadata) : null;
   const dom = isDomain ? domainExpiryInfo(summary?.last_metadata) : null;
@@ -185,7 +188,95 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
         </Panel>
 
         <div className="space-y-6">
-          {isSpeed ? (
+          {isForm ? (
+            <Panel title="Contact form">
+              {!form ? (
+                <p className="px-4 py-4 text-sm text-slate-500">{summary?.last_error_message ?? "Not checked yet."}</p>
+              ) : (
+                <dl>
+                  <ConfigRow label="On the page">
+                    {form.forms.length + form.embeds.length === 0 ? (
+                      <span className="text-red-700">No form found</span>
+                    ) : (
+                      <>
+                        {form.forms.map((f, i) => (
+                          <span key={`f${i}`} className="block">
+                            {f.builder}
+                            {f.id && ` #${f.id}`} · {f.fields} field{f.fields === 1 ? "" : "s"}
+                            {!f.hasSubmit && <span className="text-red-700"> · no submit button</span>}
+                          </span>
+                        ))}
+                        {form.embeds.map((e, i) => {
+                          const hs = form.hubspot.find((h) => h.id === e.id);
+                          return (
+                            <span key={`e${i}`} className="block">
+                              {e.builder}
+                              {e.id && ` ${e.id.slice(0, 8)}…`} <span className="text-xs text-slate-500">(loaded by script)</span>
+                              {hs?.status === "ok" && (
+                                <span className="text-xs text-fig-teal">
+                                  {" "}
+                                  · live in HubSpot{hs.fields !== null && `, ${hs.fields} fields`}
+                                </span>
+                              )}
+                              {hs?.status === "missing" && <span className="text-xs text-red-700"> · deleted in HubSpot</span>}
+                              {hs?.status === "unpublished" && <span className="text-xs text-red-700"> · not published in HubSpot</span>}
+                              {hs?.status === "unknown" && <span className="text-xs text-slate-500"> · HubSpot didn&apos;t answer</span>}
+                            </span>
+                          );
+                        })}
+                      </>
+                    )}
+                    {form.captcha && <span className="block text-xs text-slate-500">Spam protection (CAPTCHA) found</span>}
+                    {form.errors.map((e) => (
+                      <span key={e} className="block text-red-700">
+                        {e}
+                      </span>
+                    ))}
+                  </ConfigRow>
+                  <ConfigRow label="Site email">
+                    {form.embeds.some((e) => e.builder === "HubSpot") && (
+                      <span className="block text-xs text-slate-500">
+                        HubSpot forms are emailed by HubSpot, so the site&apos;s email doesn&apos;t affect them.
+                      </span>
+                    )}
+                    {!form.mail ? (
+                      <span className="text-slate-500">
+                        {form.pluginNote ?? "Install the Website Watch plugin to check the site's email (Settings → WordPress plugin)"}
+                      </span>
+                    ) : (
+                      <>
+                        {form.mail.failures.length === 0 ? (
+                          <span className="block text-fig-teal">No failed emails in the last 7 days</span>
+                        ) : (
+                          form.mail.failures.map((f) => (
+                            <span key={f.message} className="block text-red-700">
+                              {f.count} failed{f.lastAt && `, last ${timeAgo(f.lastAt)}`}: {f.message}
+                            </span>
+                          ))
+                        )}
+                        {form.mail.lastSentAt && (
+                          <span className="block text-xs text-slate-500">Last email sent {timeAgo(form.mail.lastSentAt)}</span>
+                        )}
+                      </>
+                    )}
+                  </ConfigRow>
+                  {form.mail && (
+                    <ConfigRow label="Daily test email">
+                      {!form.mail.test.configured ? (
+                        <span className="text-slate-500">Off (set WEBSITE_WATCH_TEST_EMAIL and re-install the plugin)</span>
+                      ) : form.mail.test.ok === null ? (
+                        <span className="text-slate-500">Hasn&apos;t run yet</span>
+                      ) : form.mail.test.ok ? (
+                        <span className="text-fig-teal">Sent {form.mail.test.lastAt ? timeAgo(form.mail.test.lastAt) : ""}</span>
+                      ) : (
+                        <span className="text-red-700">Failed: {form.mail.test.error}</span>
+                      )}
+                    </ConfigRow>
+                  )}
+                </dl>
+              )}
+            </Panel>
+          ) : isSpeed ? (
             <Panel
               title="Page speed (mobile)"
               aside={
@@ -585,7 +676,7 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
               <ConfigRow label="Website">
                 {displayUrl(website.url)} · {ENVIRONMENT_LABELS[website.environment]}
               </ConfigRow>
-              {!isSsl && !isLinkScan && !isTracking && !isWordPress && !isVisibility && !isDomain && !isSpeed && (
+              {!isSsl && !isLinkScan && !isTracking && !isWordPress && !isVisibility && !isDomain && !isSpeed && !isForm && (
                 <>
                   <ConfigRow label="Expected status">
                     {monitor.expected_status_code ?? <span className="text-slate-500">200–399 (default)</span>}
