@@ -7,12 +7,13 @@ import { TestAlertButton } from "@/components/test-alert-button";
 import { HealthBadge } from "@/components/status";
 import { Panel, PageHeader, When } from "@/components/ui";
 import { getDataSource, getLastWeeklySummary, getSchedulerStatus } from "@/lib/data";
-import { SUMMARY_SSL_DAYS, SUMMARY_WEEKDAY_HOUR } from "@/lib/notify/weekly";
+import { SUMMARY_SSL_DAYS } from "@/lib/notify/weekly";
+import { SettingsForm } from "@/components/settings-form";
+import { WEEKDAY_NAMES } from "@/lib/settings";
+import { getSettingsInfo } from "@/lib/settings-store";
 import { APP_TIMEZONE } from "@/lib/format";
 import { allowedDomains } from "@/lib/auth/session";
-import { SSL_FAILURE_DAYS, SSL_WARNING_DAYS } from "@/lib/monitoring/evaluate";
 import { MAX_LINKS } from "@/lib/monitoring/links";
-import { BACKUP_MAX_AGE_HOURS } from "@/lib/monitoring/wordpress";
 import { checkWpeConnection } from "@/lib/monitoring/wpengine";
 import { WP_PLUGIN_VERSION, WP_PLUGIN_ZIP, pluginKey } from "@/lib/monitoring/wp-plugin";
 import { RETENTION_DAYS } from "@/lib/monitoring/scheduler";
@@ -57,8 +58,11 @@ function EnvStatus({ found, options }: { found: string | null; options: readonly
   );
 }
 
-export default async function SettingsPage() {
+export default async function SettingsPage({ searchParams }: PageProps<"/settings">) {
   await connection();
+  const saved = (await searchParams).saved === "1";
+  const settingsInfo = await getSettingsInfo();
+  const rules = settingsInfo.settings;
   const source = getDataSource();
   const env = supabaseEnvStatus();
   const cronSecretSet = (process.env.CRON_SECRET?.length ?? 0) >= 16;
@@ -72,7 +76,10 @@ export default async function SettingsPage() {
 
   return (
     <>
-      <PageHeader title="Settings" description="Read-only for now. Editable settings come in a later phase." />
+      <PageHeader
+        title="Settings"
+        description="Monitoring rules can be changed here. Connections (Supabase, Slack, WP Engine) are set with environment variables."
+      />
 
       <Panel title="Data source" className="mb-6">
         <dl>
@@ -111,20 +118,42 @@ export default async function SettingsPage() {
         )}
       </Panel>
 
-      <Panel title="Monitoring rules">
+      {saved && (
+        <p role="status" className="mb-6 rounded-md bg-fig-teal/10 px-3 py-2 text-sm text-fig-ink">
+          Settings saved. Checks use them within about 30 seconds.
+        </p>
+      )}
+
+      <Panel
+        title="Monitoring rules"
+        aside={
+          settingsInfo.updatedBy && settingsInfo.updatedAt ? (
+            <>
+              Last changed by {settingsInfo.updatedBy}, <When iso={settingsInfo.updatedAt} />
+            </>
+          ) : null
+        }
+      >
+        <SettingsForm
+          settings={rules}
+          disabledReason={
+            source === "sample"
+              ? "Connect Supabase to change these."
+              : !settingsInfo.stored
+                ? "Run the migration 20261002000000_app_settings.sql in Supabase to change these (defaults apply until then)."
+                : undefined
+          }
+        />
+      </Panel>
+
+      <Panel title="Fixed rules" className="mt-6">
         <dl>
-          <Row label="Open an incident after">
-            2 consecutive failed or slow checks{" "}
-            <span className="text-slate-500">(severity from the monitor; slow responses are at most Warning)</span>
+          <Row label="Incident severity">
+            From the monitor; slow responses are at most Warning
           </Row>
-          <Row label="Resolve an incident after">2 consecutive successful checks</Row>
           <Row label="Default HTTP success">Status 200–399 (unless a monitor sets an expected status)</Row>
           <Row label="Display timezone">{APP_TIMEZONE}</Row>
           <Row label="Check intervals">5 min, 15 min, 30 min, 1 hour, 6 hours, daily</Row>
-          <Row label="SSL certificates">
-            Warning at {SSL_WARNING_DAYS} days left; failed at {SSL_FAILURE_DAYS} days, or when expired, untrusted or for
-            the wrong domain
-          </Row>
           <Row label="Tracking tags">
             Looks for Google Tag Manager, GA4, Google Ads, Meta Pixel, LinkedIn Insight and HubSpot in the page&apos;s HTML;
             fails when an expected tag is missing. Tags loaded inside GTM aren&apos;t visible without a browser.
@@ -163,8 +192,15 @@ export default async function SettingsPage() {
             {alertLinkBase ?? <span className="text-slate-500">No link (set APP_URL)</span>}
           </Row>
           <Row label="Weekly summary">
-            Mondays at {SUMMARY_WEEKDAY_HOUR}:00 ({APP_TIMEZONE}): open incidents, backups, certificates expiring within{" "}
-            {SUMMARY_SSL_DAYS} days, WordPress updates, broken links and missing tags.{" "}
+            {rules.summaryEnabled ? (
+              <>
+                {WEEKDAY_NAMES[rules.summaryWeekday - 1]}s at {rules.summaryHour}:00 ({APP_TIMEZONE})
+              </>
+            ) : (
+              <>Off</>
+            )}
+            : open incidents, backups, PHP errors, certificates expiring within {SUMMARY_SSL_DAYS} days, WordPress
+            updates, broken links and missing tags. Day and time: Monitoring rules above.{" "}
             <span className="text-slate-500">
               Last sent: {lastSummary ? <When iso={lastSummary} /> : "never"}
             </span>
@@ -203,7 +239,7 @@ export default async function SettingsPage() {
           </Row>
           <Row label="What it adds">
             WordPress and PHP versions, install status and backups for sites hosted on WP Engine. A WordPress Health
-            monitor is critical when there&apos;s no completed backup in {BACKUP_MAX_AGE_HOURS} hours.
+            monitor is critical when there&apos;s no completed backup in {rules.backupMaxAgeHours} hours.
           </Row>
           {wpe.ok && (
             <Row label="Sites">

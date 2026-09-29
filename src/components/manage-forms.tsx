@@ -219,7 +219,7 @@ const TYPE_HELP: Record<MonitorType, string> = {
   tracking_tags:
     "Fails when any chosen tag is missing from the page's HTML (e.g. removed by a theme or plugin update).",
   wordpress_health:
-    "WordPress version, PHP, plugins with updates, and WP Engine backups (critical after 48 hours without a completed backup).",
+    "WordPress version, PHP, plugins with updates, PHP errors, and WP Engine backups (limits in Settings → Monitoring rules).",
 };
 
 const SEVERITY_HELP: Partial<Record<MonitorType, string>> = {

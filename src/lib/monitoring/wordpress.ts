@@ -1,17 +1,8 @@
 // WordPress health: public-signal detection, version comparison, and the rules
 // for WP Engine data (backups, PHP, install status). Pure (relative imports only)
 // so everything here can be tested directly.
+import { DEFAULT_SETTINGS, type AppSettings } from "../settings.ts";
 import type { CheckOutcome } from "./evaluate.ts";
-
-// Rules ---------------------------------------------------------------------------
-
-/** No completed backup within this many hours is critical. */
-export const BACKUP_MAX_AGE_HOURS = 48;
-/**
- * Oldest PHP branch still receiving security fixes. PHP 8.2's security support
- * runs to Dec 2026; move this to "8.3" then. See https://www.php.net/supported-versions.php
- */
-export const MIN_SUPPORTED_PHP = "8.2";
 
 // Public signals ------------------------------------------------------------------
 
@@ -313,12 +304,15 @@ export interface WordPressProblem {
   message: string;
 }
 
-export function wordpressProblems(f: WordPressFacts, now: Date): WordPressProblem[] {
+/** The Settings that shape these rules (backup age, minimum PHP, whether updates warn). */
+export type WordPressRules = Pick<AppSettings, "backupMaxAgeHours" | "minPhpVersion" | "warnOnUpdates">;
+
+export function wordpressProblems(f: WordPressFacts, now: Date, rules: WordPressRules = DEFAULT_SETTINGS): WordPressProblem[] {
   const problems: WordPressProblem[] = [];
   if (f.backups) {
     const age = f.backups.lastCompletedAt ? (now.getTime() - new Date(f.backups.lastCompletedAt).getTime()) / 3_600_000 : null;
     if (age === null) problems.push({ level: "critical", message: "No completed WP Engine backup found" });
-    else if (age > BACKUP_MAX_AGE_HOURS) {
+    else if (age > rules.backupMaxAgeHours) {
       problems.push({ level: "critical", message: `Last completed backup was ${Math.floor(age)} hours ago` });
     }
     if (f.backups.latestStatus === "aborted") problems.push({ level: "critical", message: "Latest backup was aborted" });
@@ -327,13 +321,14 @@ export function wordpressProblems(f: WordPressFacts, now: Date): WordPressProble
     problems.push({ level: "warning", message: `WP Engine install is ${f.install.status}` });
   }
   const deferred = f.install?.defer_wordpress_upgrades_until && new Date(f.install.defer_wordpress_upgrades_until) > now;
-  if (f.wpVersion && f.latestWpVersion && compareVersions(f.wpVersion, f.latestWpVersion) < 0 && !deferred) {
+  // With updates not counting as warnings (Settings), they're still listed, just not flagged.
+  if (rules.warnOnUpdates && f.wpVersion && f.latestWpVersion && compareVersions(f.wpVersion, f.latestWpVersion) < 0 && !deferred) {
     problems.push({ level: "warning", message: `WordPress ${f.wpVersion} (latest is ${f.latestWpVersion})` });
   }
-  if (f.phpVersion && compareVersions(f.phpVersion, MIN_SUPPORTED_PHP) < 0) {
-    problems.push({ level: "warning", message: `PHP ${f.phpVersion} is no longer supported (use ${MIN_SUPPORTED_PHP}+)` });
+  if (rules.minPhpVersion && f.phpVersion && compareVersions(f.phpVersion, rules.minPhpVersion) < 0) {
+    problems.push({ level: "warning", message: `PHP ${f.phpVersion} is below the minimum (${rules.minPhpVersion})` });
   }
-  if (f.outdatedPlugins.length > 0) {
+  if (rules.warnOnUpdates && f.outdatedPlugins.length > 0) {
     const n = f.outdatedPlugins.length;
     problems.push({ level: "warning", message: `${n} plugin${n === 1 ? "" : "s"} with updates available` });
   }
@@ -353,7 +348,7 @@ export function wordpressProblems(f: WordPressFacts, now: Date): WordPressProble
   }
   if (f.report) {
     const themes = f.report.themes.filter((t) => t.update).length;
-    if (themes > 0) problems.push({ level: "warning", message: `${themes} theme${themes === 1 ? "" : "s"} with updates available` });
+    if (rules.warnOnUpdates && themes > 0) problems.push({ level: "warning", message: `${themes} theme${themes === 1 ? "" : "s"} with updates available` });
     if (f.report.debugDisplay) {
       problems.push({ level: "warning", message: "Debug mode shows PHP errors to visitors (WP_DEBUG_DISPLAY)" });
     }

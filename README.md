@@ -13,7 +13,7 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 - **Phase 4 (scheduled monitoring): done.** One scheduled worker, triggered every 5 minutes by Supabase `pg_cron`, checks every monitor that is due according to its interval. See **Scheduled checks**.
 - **Staff login: done.** Google sign-in limited to `@figmints.com` accounts. See **Login**.
 - **Phase 5 (operational improvements): done.** Add/edit clients, websites and monitors in the app (with bulk monitor setup), filters, timed snooze, website maintenance windows, uptime percentages, incident history, and automatic check-history cleanup.
-- **Phase 9 (alerts): Slack done.** Critical incidents are posted to a Slack channel when they open and when they resolve, and a **weekly summary** goes out every Monday. See **Alerts**. Email and Basecamp aren't built yet.
+- **Phase 9 (alerts): Slack done.** Critical incidents are posted to a Slack channel when they open and when they resolve, and a **weekly summary** goes out once a week. See **Alerts**. Email and Basecamp aren't built yet.
 - **Phase 8 (advanced monitoring): SSL certificate expiry done.** An *SSL Certificate* monitor warns before a site's certificate expires. See **SSL certificates**.
 - **Phase 8: broken link scans done.** A *Broken Links* monitor scans a page's links, images, stylesheets and scripts. See **Broken link scans**.
 - **Phase 8: tracking tag checks done.** A *Tracking Tags* monitor makes sure GTM, GA4, Google Ads, Meta Pixel, LinkedIn Insight and HubSpot tags stay on a page. See **Tracking tags**.
@@ -97,6 +97,7 @@ The schema lives in `supabase/migrations/`. Sample data lives in `supabase/seed.
    - `20260929000000_tracking_tags.sql` (Phase 8, tracking tags)
    - `20260930000000_wordpress_health.sql` (Phase 7, WordPress health)
    - `20261001000000_weekly_summary.sql` (Phase 9, weekly summary)
+   - `20261002000000_app_settings.sql` (editable monitoring rules)
 3. (Optional) Run `supabase/seed.sql` to load the 6 sample clients. You can re-run it safely; it replaces the earlier sample rows.
 4. Copy the project URL and the secret key into `.env.local`, then restart `npm run dev`.
 
@@ -187,11 +188,11 @@ Each check makes one `GET` request to the monitor's target URL and stores the re
 | --- | --- | --- |
 | HTTP Status | Status is 200–399, or exactly the monitor's *expected status* if one is set | Failed |
 | Expected Content | Status passes **and** the expected text appears in the page's visible text | Failed |
-| Response Time | Status passes **and** the full response takes no longer than *max response time* (default 3000 ms) | Warning (slow) |
+| Response Time | Status passes **and** the full response takes no longer than *max response time* (default 3000 ms, changeable in **Settings**) | Warning (slow) |
 | WordPress Health | No backup problems and nothing out of date | Failed on backup problems (uses the monitor's severity; default Critical); Warning for outdated WordPress, PHP or plugins |
 | Tracking Tags | The page loads and every expected tag is in its HTML | Failed, naming the missing tags (uses the monitor's severity; default Warning) |
 | Broken Links | The page loads and none of its first 40 links/images/stylesheets/scripts are broken | Warning when any are broken; Failed only if the page itself doesn't load |
-| SSL Certificate | The certificate is trusted, matches the domain, and has more than 14 days left | Warning at 14 days or less; Failed at 3 days or less, or when expired, untrusted or for the wrong domain |
+| SSL Certificate | The certificate is trusted, matches the domain, and has more than 14 days left | Warning at 14 days or less; Failed at 3 days or less, or when expired, untrusted or for the wrong domain (both day limits in **Settings**) |
 
 Any monitor with *expected text* set also checks the text, whatever its type.
 
@@ -249,6 +250,8 @@ A **WordPress Health** monitor combines three sources:
 | --- | --- |
 | **Failed** (monitor severity, Critical by default, so it posts to Slack) | No completed WP Engine backup in **48 hours**, none at all, or the **latest backup was aborted** |
 | **Warning** | WordPress older than the latest release (unless upgrades are deferred on WP Engine), PHP below 8.2, WP Engine install not active, plugins with updates, or WordPress not detected |
+
+The backup limit, the minimum PHP version (or not checking PHP) and whether available updates count as a Warning can be changed in **Settings → Monitoring rules**; the values above are the defaults.
 
 - **Adding one:** tick **Also check WordPress health** on **Add client** or **Add monitors**. It's checked every 6 hours, one per website. The **One monitor** tab also offers the *WordPress Health* type.
 - **Where you see it:** the monitor page's **WordPress** panel shows the versions and where they came from, PHP, the WP Engine install, the last backup, the theme, and each visible plugin with its version and any update.
@@ -381,7 +384,7 @@ An incident is a confirmed problem, not a single failed request. After every che
 | Situation | What happens |
 | --- | --- |
 | 1 failed or slow check | Nothing yet. The Dashboard lists it under **Failing checks, no incident yet**. |
-| 2 failed or slow checks in a row, no unresolved incident | **Incident opens**. *First detected* is the first failure in the streak. |
+| 2 failed or slow checks in a row (changeable in **Settings**), no unresolved incident | **Incident opens**. *First detected* is the first failure in the streak. |
 | Still failing with an incident | The incident's *last detected* time and description update. Severity can go up (slow → down), never down. |
 | 1 success | Nothing yet. One good check isn't enough. |
 | 2 successes in a row | **Incident resolves** automatically, whatever its status (Open, Investigating, Snoozed, Expected Maintenance). |
@@ -465,6 +468,24 @@ Runs never overlap on the same monitor (see *claims* above), so this is safe. **
 curl -X POST http://localhost:3000/api/cron/run-checks -H "Authorization: Bearer $CRON_SECRET"
 ```
 
+## Settings
+
+**Settings → Monitoring rules** changes how checks are judged, without a deploy. Values are stored in one row of the `app_settings` table (migration `20261002000000_app_settings.sql`), and checks pick up a change within about 30 seconds. The page shows who changed them last.
+
+| Setting | Default | Allowed |
+| --- | --- | --- |
+| Failed checks before an incident opens | 2 | 1–10 |
+| Passing checks before it resolves | 2 | 1–10 |
+| Default response time limit (for Response Time monitors without their own) | 3000 ms | 500–30000 |
+| SSL: Warning when it expires within | 14 days | 1–90 |
+| SSL: Failed when it expires within | 3 days | 0–60, fewer than the warning |
+| WordPress: backup missing after | 48 hours | 12–720 |
+| WordPress: minimum PHP version | 8.2 | e.g. 7.4, or empty to not check PHP |
+| WordPress: available updates count as a Warning | on | Off keeps updates listed (monitor page, weekly summary) without turning sites yellow |
+| Weekly summary on, day, time | on, Monday, 9:00 | any day, any hour (`APP_TIMEZONE`) |
+
+The database enforces the same limits, and the app falls back to the defaults if the row is missing (e.g. before the migration runs). Changes apply to new checks; existing incidents and past results aren't re-judged. Everything else (connections, secrets, timezone) stays in environment variables.
+
 ## Alerts
 
 Website Watch posts to **one Slack channel**. It's deliberately quiet, so people keep paying attention to it:
@@ -483,7 +504,7 @@ Website Watch posts to **one Slack channel**. It's deliberately quiet, so people
 
 ### Weekly summary
 
-Every **Monday at 9:00** (`APP_TIMEZONE`), one Slack message to the same channel lists what needs work across all active sites, so update warnings become a to-do list instead of a wall of yellow badges:
+Every **Monday at 9:00** (`APP_TIMEZONE`; day, time and on/off in **Settings**), one Slack message to the same channel lists what needs work across all active sites, so update warnings become a to-do list instead of a wall of yellow badges:
 
 - **Overview:** websites, uptime over 7 days, incidents opened this week and still open.
 - **Needs attention now:** unresolved incidents, Critical first. Warnings that have their own section below aren't repeated.
@@ -495,11 +516,11 @@ Every **Monday at 9:00** (`APP_TIMEZONE`), one Slack message to the same channel
 
 Each section lists up to 15 sites, then "…and N more". Staging sites are marked.
 
-**How it's sent:** the scheduler checks on every run whether this week's summary is due. The first run after Monday 9:00 claims the week in the `weekly_summaries` table and posts it; if the scheduler was down, it goes out as soon as it's back, later that week. The claim makes sure it's posted once, even with overlapping runs. If Slack fails, the claim is released and the next run tries again.
+**How it's sent:** the scheduler checks on every run whether this week's summary is due. The first run after the scheduled time claims the week in the `weekly_summaries` table and posts it; if the scheduler was down, it goes out as soon as it's back, within 24 hours of the scheduled time. (Changing the day in Settings to one that already passed this week doesn't send an extra summary.) The claim makes sure it's posted once, even with overlapping runs. If Slack fails, the claim is released and the next run tries again.
 
-- **Settings → Alerts → Send summary now** posts the current summary right away, e.g. to preview it. It doesn't affect the Monday send.
+- **Settings → Alerts → Send summary now** posts the current summary right away, e.g. to preview it. It doesn't affect the scheduled send.
 - **Setup:** run the migration `20261001000000_weekly_summary.sql`. Nothing else: it uses `SLACK_WEBHOOK_URL` and the existing scheduler.
-- **The first summary** goes out on the first scheduler run after the migration and deploy, if that's after Monday 9:00 that week.
+- **The first summary** goes out at the first scheduled time after the migration and deploy (or within 24 hours after it).
 
 ### Setting up Slack (once)
 

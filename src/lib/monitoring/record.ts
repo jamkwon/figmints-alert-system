@@ -1,14 +1,11 @@
 import "server-only";
 import { isInFuture } from "@/lib/format";
-import {
-  FAILURES_TO_OPEN,
-  SUCCESSES_TO_RESOLVE,
-  decideIncident,
-  type IncidentDecision,
-} from "@/lib/monitoring/incident-engine";
+import { decideIncident, type IncidentDecision } from "@/lib/monitoring/incident-engine";
 import { SYSTEM_ACTOR, logIncidentEvent } from "@/lib/monitoring/incident-events";
 import { notifyIncidentChange } from "@/lib/notify/send";
 import { performCheck } from "@/lib/monitoring/run-check";
+import type { AppSettings } from "@/lib/settings";
+import { getSettings } from "@/lib/settings-store";
 import { getSupabase } from "@/lib/supabase/server";
 import type { CheckResult, Incident, Monitor } from "@/lib/types";
 
@@ -24,7 +21,8 @@ export interface RecordedCheck {
 /** Runs a monitor's check, stores the result, updates check times, and applies incident rules. */
 export async function runAndRecordCheck(monitor: Monitor): Promise<RecordedCheck> {
   const checkedAt = new Date();
-  const { outcome, metadata } = await performCheck(monitor);
+  const settings = await getSettings();
+  const { outcome, metadata } = await performCheck(monitor, settings);
   const db = getSupabase();
 
   const { data, error } = await db
@@ -50,11 +48,11 @@ export async function runAndRecordCheck(monitor: Monitor): Promise<RecordedCheck
     .eq("id", monitor.id);
   if (update.error) throw new Error(`Failed to update monitor: ${update.error.message}`);
 
-  const incident = await applyIncidentRules(monitor);
+  const incident = await applyIncidentRules(monitor, settings);
   return { result: data as CheckResult, incident };
 }
 
-async function applyIncidentRules(monitor: Monitor): Promise<IncidentDecision["kind"]> {
+async function applyIncidentRules(monitor: Monitor, settings: AppSettings): Promise<IncidentDecision["kind"]> {
   const db = getSupabase();
   const [history, current] = await Promise.all([
     db
@@ -75,7 +73,7 @@ async function applyIncidentRules(monitor: Monitor): Promise<IncidentDecision["k
   if (current.error) throw new Error(`Failed to load current incident: ${current.error.message}`);
 
   const existing = (current.data as Incident | null) ?? undefined;
-  const decision = decideIncident(monitor, history.data as CheckResult[], existing);
+  const decision = decideIncident(monitor, history.data as CheckResult[], existing, settings);
 
   switch (decision.kind) {
     case "none":
@@ -109,7 +107,7 @@ async function applyIncidentRules(monitor: Monitor): Promise<IncidentDecision["k
         insert.data.id,
         SYSTEM_ACTOR,
         "opened",
-        `Opened after ${FAILURES_TO_OPEN} consecutive failed checks (${decision.incident.severity})` +
+        `Opened after ${settings.failuresToOpen} consecutive failed checks (${decision.incident.severity})` +
           (inMaintenance ? " during a maintenance window, so marked Expected Maintenance" : ""),
       );
       await notifyIncidentChange("opened", insert.data.id);
@@ -144,8 +142,8 @@ async function applyIncidentRules(monitor: Monitor): Promise<IncidentDecision["k
         SYSTEM_ACTOR,
         "resolved",
         status === "ignored"
-          ? `Closed automatically after ${SUCCESSES_TO_RESOLVE} successful checks (was ignored)`
-          : `Resolved automatically after ${SUCCESSES_TO_RESOLVE} successful checks`,
+          ? `Closed automatically after ${settings.passesToResolve} successful checks (was ignored)`
+          : `Resolved automatically after ${settings.passesToResolve} successful checks`,
       );
       await notifyIncidentChange("resolved", existing!.id);
       break;

@@ -2,11 +2,13 @@
 
 import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
-import { isStaffRequest } from "@/lib/auth/session";
+import { getStaffUser, isStaffRequest } from "@/lib/auth/session";
 import { detectTrackingOnPage } from "@/lib/monitoring/run-check";
 import { MAINTENANCE_HOURS } from "@/lib/labels";
 import { MAX_IMPORT, buildCandidates, monitorsForImport } from "@/lib/monitoring/wpengine-import";
 import { listInstalls, listSites } from "@/lib/monitoring/wpengine";
+import { parseSettingsForm } from "@/lib/settings";
+import { saveSettings } from "@/lib/settings-store";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
 import type { Monitor, Website } from "@/lib/types";
 import {
@@ -477,5 +479,18 @@ export async function importFromWpeAction(_prev: FormState, formData: FormData):
     const { error } = await db.from("monitors").insert(monitors);
     fail("add monitors", error);
     return `/wpengine?imported=${created.data!.length}`;
+  });
+}
+
+// Settings ----------------------------------------------------------------------------
+
+/** Saves the editable monitoring rules (Settings). */
+export async function saveSettingsAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return handle(async () => {
+    const parsed = parseSettingsForm((name) => formData.get(name));
+    if (!parsed.ok) throw new ValidationError(parsed.field, parsed.message);
+    const actor = (await getStaffUser())?.email ?? "staff";
+    await saveSettings(parsed.settings, actor);
+    return "/settings?saved=1";
   });
 }

@@ -8,8 +8,8 @@ import { TRACKING_TAGS, isTrackingTag } from "../monitoring/tracking.ts";
 import { compareVersions } from "../monitoring/wordpress.ts";
 import type { CheckStatus, Environment, MonitorType, Severity } from "../types.ts";
 
-/** Monday at this hour (APP_TIMEZONE); a late scheduler catches up later in the week. */
-export const SUMMARY_WEEKDAY_HOUR = 9;
+/** A summary missed at its time (scheduler down) is still sent within this many hours. */
+export const SUMMARY_CATCH_UP_HOURS = 24;
 /** Certificates expiring within this many days are listed. */
 export const SUMMARY_SSL_DAYS = 30;
 /** Lines per section before "…and N more". */
@@ -53,10 +53,12 @@ export interface SummaryInput {
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 /**
- * The week a summary belongs to (its Monday, as YYYY-MM-DD in `timeZone`), and
- * whether it's due: from Monday SUMMARY_WEEKDAY_HOUR:00 until the week ends.
+ * The week a summary belongs to: the date (YYYY-MM-DD in `timeZone`) of its most
+ * recent scheduled send, on `weekday` (1 = Monday … 7 = Sunday) at `hour`. It's
+ * due for SUMMARY_CATCH_UP_HOURS after that time, so a scheduler that was down
+ * catches up, but changing the day in Settings doesn't send an extra one.
  */
-export function summaryWeek(now: Date, timeZone: string): { weekStart: string; due: boolean } {
+export function summaryWeek(now: Date, timeZone: string, weekday = 1, hour = 9): { weekStart: string; due: boolean } {
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat("en-US", {
       timeZone,
@@ -71,9 +73,14 @@ export function summaryWeek(now: Date, timeZone: string): { weekStart: string; d
       .map((p) => [p.type, p.value]),
   );
   const dayIndex = WEEKDAYS.indexOf(parts.weekday);
+  const localHour = Number(parts.hour);
+  // Days back to the most recent scheduled day whose send time has passed.
+  let daysBack = (dayIndex - (weekday - 1) + 7) % 7;
+  if (daysBack === 0 && localHour < hour) daysBack = 7;
   const local = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day));
-  const monday = new Date(local - dayIndex * 86_400_000).toISOString().slice(0, 10);
-  return { weekStart: monday, due: dayIndex > 0 || Number(parts.hour) >= SUMMARY_WEEKDAY_HOUR };
+  const weekStart = new Date(local - daysBack * 86_400_000).toISOString().slice(0, 10);
+  const hoursSince = daysBack * 24 + localHour - hour;
+  return { weekStart, due: hoursSince < SUMMARY_CATCH_UP_HOURS };
 }
 
 // Message -----------------------------------------------------------------------------
@@ -257,7 +264,7 @@ export function buildWeeklySummary({ monitors, incidents, now, appUrl }: Summary
   }
   blocks.push({
     type: "context",
-    elements: [{ type: "mrkdwn", text: "Sent every Monday morning. Critical problems still alert right away." }],
+    elements: [{ type: "mrkdwn", text: "Weekly summary (day and time in Settings). Critical problems still alert right away." }],
   });
   return { text: `${title}: ${overview}`, blocks, hasIssues: sections.length > 0 };
 }

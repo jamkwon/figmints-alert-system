@@ -4,16 +4,25 @@ import { buildWeeklySummary, summaryWeek, type SummaryMonitor } from "./weekly.t
 
 const TZ = "America/New_York";
 
-test("summaryWeek: due from Monday 9:00 local until the week ends", () => {
+test("summaryWeek: due from the scheduled time (default Monday 9:00 local) for 24 hours", () => {
   // Monday Sep 28, 2026, 8:59 and 9:00 in New York (EDT, UTC-4).
-  assert.deepEqual(summaryWeek(new Date("2026-09-28T12:59:00Z"), TZ), { weekStart: "2026-09-28", due: false });
+  assert.deepEqual(summaryWeek(new Date("2026-09-28T12:59:00Z"), TZ), { weekStart: "2026-09-21", due: false });
   assert.deepEqual(summaryWeek(new Date("2026-09-28T13:00:00Z"), TZ), { weekStart: "2026-09-28", due: true });
-  // Later in the week still belongs to the same Monday (a late scheduler catches up).
-  assert.deepEqual(summaryWeek(new Date("2026-10-01T15:00:00Z"), TZ), { weekStart: "2026-09-28", due: true });
+  // A scheduler that was down catches up until Tuesday 8:59, not later.
+  assert.deepEqual(summaryWeek(new Date("2026-09-29T12:59:00Z"), TZ), { weekStart: "2026-09-28", due: true });
+  assert.deepEqual(summaryWeek(new Date("2026-09-29T13:00:00Z"), TZ), { weekStart: "2026-09-28", due: false });
   // Sunday 11 pm local is still that week; UTC is already Monday.
-  assert.deepEqual(summaryWeek(new Date("2026-10-05T03:30:00Z"), TZ), { weekStart: "2026-09-28", due: true });
-  // Monday early morning local: new week, not due yet.
-  assert.deepEqual(summaryWeek(new Date("2026-10-05T10:00:00Z"), TZ), { weekStart: "2026-10-05", due: false });
+  assert.deepEqual(summaryWeek(new Date("2026-10-05T03:30:00Z"), TZ), { weekStart: "2026-09-28", due: false });
+});
+
+test("summaryWeek: another day and time from Settings", () => {
+  // Friday (5) at 16:00: Friday Oct 2, 2026, 4 pm New York = 20:00 UTC.
+  assert.deepEqual(summaryWeek(new Date("2026-10-02T19:59:00Z"), TZ, 5, 16), { weekStart: "2026-09-25", due: false });
+  assert.deepEqual(summaryWeek(new Date("2026-10-02T20:00:00Z"), TZ, 5, 16), { weekStart: "2026-10-02", due: true });
+  // Changing the day mid-week to one that already passed doesn't send an extra summary.
+  assert.deepEqual(summaryWeek(new Date("2026-09-30T15:00:00Z"), TZ, 1, 9), { weekStart: "2026-09-28", due: false });
+  // Sunday (7) at 0:00.
+  assert.deepEqual(summaryWeek(new Date("2026-10-04T04:00:00Z"), TZ, 7, 0), { weekStart: "2026-10-04", due: true });
 });
 
 const now = new Date("2026-09-28T13:00:00Z");
