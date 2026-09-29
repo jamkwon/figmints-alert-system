@@ -34,7 +34,7 @@ import {
 import { isWpeConfigured, listBackups, listInstalls } from "./wpengine.ts";
 import { RDAP_BOOTSTRAP_URL, daysLeft, domainCandidates, evaluateDomain, parseRdap, rdapBaseFor } from "./domain.ts";
 import { evaluateVisibility, findNoindex, foreignCanonical, robotsBlocks } from "./visibility.ts";
-import { PAGESPEED_API, PAGESPEED_STRATEGY, evaluatePageSpeed, parsePageSpeed } from "./pagespeed.ts";
+import { PAGESPEED_API, PAGESPEED_STRATEGY, evaluatePageSpeed, parsePageSpeed, scoreBaseline } from "./pagespeed.ts";
 import { detectForms, evaluateForms, hubspotDefinitionUrl, hubspotFormStatus } from "./forms.ts";
 import { firstSetEnv } from "../supabase/config.ts";
 import { WP_PLUGIN_ROUTE, pluginKey, signRequest } from "./wp-plugin.ts";
@@ -896,7 +896,12 @@ export function isPageSpeedConfigured(): boolean {
 }
 
 /** Google PageSpeed Insights for the page (mobile): Lighthouse score, lab and real-user metrics. */
-export async function performPageSpeedCheck(monitor: Monitor, settings: AppSettings = DEFAULT_SETTINGS): Promise<HttpCheckResult> {
+export async function performPageSpeedCheck(
+  monitor: Monitor,
+  settings: AppSettings = DEFAULT_SETTINGS,
+  /** Scores from the previous 7 days, to spot a sharp drop. */
+  previousScores: number[] = [],
+): Promise<HttpCheckResult> {
   const started = performance.now();
   const metadata: CheckMetadata = {};
   const warn = (message: string): HttpCheckResult => ({
@@ -951,7 +956,9 @@ export async function performPageSpeedCheck(monitor: Monitor, settings: AppSetti
     opportunities: result.opportunities,
     lighthouse_version: result.lighthouseVersion,
   });
-  return { outcome: evaluatePageSpeed(result, settings.minPerformanceScore, performance.now() - started), metadata };
+  const baseline = scoreBaseline(previousScores);
+  metadata.baseline = baseline;
+  return { outcome: evaluatePageSpeed(result, settings.minPerformanceScore, performance.now() - started, baseline), metadata };
 }
 
 // Contact form ---------------------------------------------------------------------------
@@ -1048,8 +1055,18 @@ export async function performContactFormCheck(monitor: Monitor): Promise<HttpChe
   };
 }
 
+/** Recent results some checks compare against. */
+export interface CheckContext {
+  /** Page speed: scores from the previous 7 days. */
+  previousScores?: number[];
+}
+
 /** Runs the right kind of check for the monitor, with the rules from Settings. */
-export function performCheck(monitor: Monitor, settings: AppSettings = DEFAULT_SETTINGS): Promise<HttpCheckResult> {
+export function performCheck(
+  monitor: Monitor,
+  settings: AppSettings = DEFAULT_SETTINGS,
+  context: CheckContext = {},
+): Promise<HttpCheckResult> {
   // Monitors without their own response time limit use the Settings default.
   const m = { ...monitor, max_response_time_ms: monitor.max_response_time_ms ?? settings.defaultMaxResponseMs };
   if (m.monitor_type === "ssl_expiry") return performCertificateCheck(m, settings);
@@ -1058,7 +1075,7 @@ export function performCheck(monitor: Monitor, settings: AppSettings = DEFAULT_S
   if (m.monitor_type === "wordpress_health") return performWordPressCheck(m, settings);
   if (m.monitor_type === "search_visibility") return performVisibilityCheck(m);
   if (m.monitor_type === "domain_expiry") return performDomainCheck(m);
-  if (m.monitor_type === "page_speed") return performPageSpeedCheck(m, settings);
+  if (m.monitor_type === "page_speed") return performPageSpeedCheck(m, settings, context.previousScores);
   if (m.monitor_type === "contact_form") return performContactFormCheck(m);
   return performHttpCheck(m);
 }

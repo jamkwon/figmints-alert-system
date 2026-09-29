@@ -18,12 +18,27 @@ export interface RecordedCheck {
   incident: IncidentDecision["kind"];
 }
 
+/** A page speed monitor's scores from the 7 days before this check (for spotting a sharp drop). */
+async function recentScores(monitorId: string, before: Date): Promise<number[]> {
+  const { data, error } = await getSupabase()
+    .from("check_results")
+    .select("score:metadata->score")
+    .eq("monitor_id", monitorId)
+    .gte("checked_at", new Date(before.getTime() - 7 * 86_400_000).toISOString())
+    .lt("checked_at", before.toISOString())
+    .order("checked_at", { ascending: false })
+    .limit(30);
+  if (error) return [];
+  return (data as { score: unknown }[]).map((r) => r.score).filter((s): s is number => typeof s === "number");
+}
+
 /** Runs a monitor's check, stores the result, updates check times, and applies incident rules. */
 export async function runAndRecordCheck(monitor: Monitor): Promise<RecordedCheck> {
   const checkedAt = new Date();
   const settings = await getSettings();
-  const { outcome, metadata } = await performCheck(monitor, settings);
   const db = getSupabase();
+  const previousScores = monitor.monitor_type === "page_speed" ? await recentScores(monitor.id, checkedAt) : undefined;
+  const { outcome, metadata } = await performCheck(monitor, settings, { previousScores });
 
   const { data, error } = await db
     .from("check_results")
