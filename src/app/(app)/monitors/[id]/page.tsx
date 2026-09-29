@@ -21,9 +21,9 @@ import {
 } from "@/lib/format";
 import { failingSince } from "@/lib/health";
 import { ENVIRONMENT_LABELS, MONITOR_TYPE_LABELS, SEVERITY_LABELS, formatInterval } from "@/lib/labels";
-import { DEFAULT_MAX_RESPONSE_TIME_MS, SSL_FAILURE_DAYS, SSL_WARNING_DAYS } from "@/lib/monitoring/evaluate";
 import { TRACKING_TAGS, TRACKING_TAG_KEYS } from "@/lib/monitoring/tracking";
-import { MIN_SUPPORTED_PHP, compareVersions } from "@/lib/monitoring/wordpress";
+import { compareVersions } from "@/lib/monitoring/wordpress";
+import { getSettings } from "@/lib/settings-store";
 
 // Run check can start a broken link scan, which takes up to ~40 seconds.
 export const maxDuration = 60;
@@ -78,7 +78,11 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
     { label: "Last 7 days", passed: uptime?.passed_7d ?? 0, checks: uptime?.checks_7d ?? 0 },
     { label: "Last 30 days", passed: uptime?.passed_30d ?? 0, checks: uptime?.checks_30d ?? 0 },
   ];
-  const [history, data] = await Promise.all([getCheckHistory(monitor.id, HISTORY_LIMIT), getAppData()]);
+  const [history, data, rules] = await Promise.all([
+    getCheckHistory(monitor.id, HISTORY_LIMIT),
+    getAppData(),
+    getSettings(),
+  ]);
   const since = failingSince(history);
 
   let disabledReason: string | undefined;
@@ -189,7 +193,7 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
                     </ConfigRow>
                     <ConfigRow label="PHP">
                       {wp.php ?? <span className="text-slate-500">Unknown (needs WP Engine)</span>}
-                      {wp.php && compareVersions(wp.php, MIN_SUPPORTED_PHP) < 0 && (
+                      {wp.php && rules.minPhpVersion && compareVersions(wp.php, rules.minPhpVersion) < 0 && (
                         <span className="text-xs text-amber-700"> · unsupported</span>
                       )}
                     </ConfigRow>
@@ -394,8 +398,8 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
                 </ConfigRow>
                 <ConfigRow label="Issued by">{cert?.issuer ?? <span className="text-slate-500">Unknown</span>}</ConfigRow>
                 <ConfigRow label="Warns at">
-                  {SSL_WARNING_DAYS} days left{" "}
-                  <span className="text-xs text-slate-500">(fails at {SSL_FAILURE_DAYS} days, expired or untrusted)</span>
+                  {rules.sslWarningDays} days left{" "}
+                  <span className="text-xs text-slate-500">(fails at {rules.sslFailureDays} days, expired or untrusted)</span>
                 </ConfigRow>
               </dl>
             </Panel>
@@ -432,7 +436,7 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
               )}
               {monitor.monitor_type === "response_time" && (
                 <ConfigRow label="Max response time">
-                  {monitor.max_response_time_ms ?? `${DEFAULT_MAX_RESPONSE_TIME_MS} (default)`} ms
+                  {monitor.max_response_time_ms ?? `${rules.defaultMaxResponseMs} (default)`} ms
                 </ConfigRow>
               )}
               <ConfigRow label="Interval">{formatInterval(monitor.interval_minutes)}</ConfigRow>
