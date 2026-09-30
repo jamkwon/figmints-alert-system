@@ -406,6 +406,36 @@ export function buildSampleData(now: Date = new Date()): {
     };
   }
 
+  // Vulnerabilities: an outdated plugin with a known (not serious) vulnerability.
+  const vulnMessage = "Known vulnerabilities: Elementor 3.20.1 (1 vulnerability, CVSS 6.4; update to 3.20.2)";
+  monitor(24, 3, "Vulnerabilities", "vulnerabilities", "https://bluefinchbakery.example/",
+    { interval: 1440, severity: "critical", passingLatestMin: 2900, failures: fails("warning", null, vulnMessage, [[25, 0], [390, 0]]) });
+  for (const check of checkResults) {
+    if (check.monitor_id !== mid(24)) continue;
+    const found = !check.passed;
+    check.metadata = {
+      vulnerabilities: {
+        feed_refreshed_at: new Date(now.getTime() - 7 * 3_600_000).toISOString(),
+        inventory_checked_at: new Date(now.getTime() - 30 * 60_000).toISOString(),
+        coverage: "complete",
+        checked: 14,
+        unknown_versions: 0,
+        min_cvss: 7,
+        software: found
+          ? [{ type: "plugin", slug: "elementor", name: "Elementor", version: "3.20.1", active: true, count: 1, worstScore: 6.4, urgent: false, updateTo: "3.20.2" }]
+          : [],
+        findings: found
+          ? [{
+              id: "sample-elementor", title: "Elementor <= 3.20.1 - Authenticated (Contributor+) Stored Cross-Site Scripting",
+              url: "https://www.wordfence.com/threat-intel/vulnerabilities/", type: "plugin", slug: "elementor", name: "Elementor",
+              version: "3.20.1", active: true, cvss: 6.4, rating: "Medium", no_login: false, urgent: false, fixed_in: "3.20.2",
+            }]
+          : [],
+        total_findings: found ? 1 : 0,
+      },
+    };
+  }
+
   // Contact form: the form is fine, but the site's email broke (expired SMTP login).
   monitor(23, 3, "Contact Form", "contact_form", "https://bluefinchbakery.example/contact",
     { interval: 360, severity: "critical", passingLatestMin: 800,

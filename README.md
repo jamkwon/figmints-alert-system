@@ -25,6 +25,7 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 - **Monthly client report: done.** A printable report per client and month (uptime, incidents, WordPress work done, page speed, security). See **Monthly report**.
 - **Contact form checks: done.** A *Contact Form* monitor fails when a page's form is missing or broken (any form tool), or when the site's emails fail to send (WordPress plugin 1.3+). See **Contact forms**.
 - **Trends and automatic reports: done.** 90-day **uptime history** bars (monitor and client pages, and daily bars in the monthly report), a **page speed trend** chart with a warning on sharp drops, and last month's client reports **posted to Slack on the 1st**. See **Uptime history**, **Page speed** and **Monthly report**.
+- **Known vulnerabilities: done.** A *Vulnerabilities* monitor compares each WordPress site's core, plugin and theme versions with the Wordfence Intelligence list (downloaded daily), and alerts on serious ones that need no login. See **Vulnerabilities**.
 
 Running checks and updating incidents require Supabase. On sample data those controls are disabled.
 
@@ -65,6 +66,7 @@ Copy `.env.example` to `.env.local`:
 | `WEBSITE_WATCH_PLUGIN_KEY` | For the WordPress plugin | Private key (64 hex characters) that signs requests to the site plugin. **Secret.** Changing it means re-installing the plugin. `WEBSITE_WATCH_PLUGIN_TOKEN` (its earlier name) also works. |
 | `WEBSITE_WATCH_TEST_EMAIL` | No | Address the WordPress plugin sends one test email a day to (e.g. `websitewatch@figmints.com`), to prove sites can send email. Built into the plugin at download. |
 | `PAGESPEED_API_KEY` | For Page Speed monitors | Google API key for PageSpeed Insights. See **Page speed**. Without it, those checks only say it's missing. |
+| `WORDFENCE_API_KEY` | For Vulnerabilities monitors | Wordfence Intelligence API key (free wordfence.com account). **Secret.** Set it in **Production only**: the key has a download limit that local and preview copies would use up. See **Vulnerabilities**. |
 | `APP_TIMEZONE` | No | Timezone for displayed times. Default `America/New_York`. |
 
 Both Supabase variables must be set for the app to use Supabase. Settings shows which data source is active and which variable names it found.
@@ -112,6 +114,7 @@ The schema lives in `supabase/migrations/`. Sample data lives in `supabase/seed.
    - `20261007000000_daily_uptime.sql` (uptime history: per-day totals)
    - `20261008000000_monthly_report_posts.sql` (monthly reports in Slack)
    - `20261009000000_uptime_speed.sql` (faster uptime numbers)
+   - `20261010000000_vulnerabilities.sql` (Vulnerabilities monitors, added to every site with WordPress Health)
 3. (Optional) Run `supabase/seed.sql` to load the 6 sample clients. You can re-run it safely; it replaces the earlier sample rows.
 4. Copy the project URL and the secret key into `.env.local`, then restart `npm run dev`.
 
@@ -139,6 +142,8 @@ For a local Supabase stack (requires Docker), run `npx supabase init` once, then
 | `incident_events` | Incident history: who changed what, when (`system` for automatic changes) |
 | `monitor_check_summary` (view) | Latest check and last successful check per monitor ("last known good") |
 | `monitor_uptime` (view) | Passing checks / all checks per monitor over 24 hours, 7 days and 30 days |
+| `wp_vulnerabilities` | Known vulnerabilities from Wordfence: one row per affected version range, replaced daily |
+| `vulnerability_feed` | When the vulnerability list was last downloaded, and the last error |
 
 Row-level security is enabled on every table with **no policies**. The public anon/publishable key can read nothing; only the server's secret key has access.
 
@@ -449,6 +454,38 @@ A **Broken Links** monitor loads a page and checks what it links to: links, imag
 - **Uptime:** link scans don't count toward uptime.
 - **Safety:** every request uses the same SSRF protection as page checks. Links to private addresses are skipped, not fetched.
 
+### Vulnerabilities
+
+A **Vulnerabilities** monitor compares a site's WordPress, plugin and theme versions with **Wordfence Intelligence**, a free list of known security flaws in WordPress software.
+
+| Result | When |
+| --- | --- |
+| **Failed** (monitor severity, Critical by default, so it posts to Slack) | A vulnerability scoring **7.0 or more** (CVSS, 0–10) that an attacker can use **without logging in** |
+| **Warning** | Any other known vulnerability in an installed version |
+| **Passed** | None found |
+
+Flaws that need a login (most of them need an editor or admin account) are real but rarely urgent, so they only warn. The score is changeable in **Settings → Monitoring rules**.
+
+- **Adding one:** it's added with **Also check WordPress health** (Add client, Add monitors, Import from WP Engine), one per website. The migration adds one to every website that already has a WordPress Health monitor.
+- **It never contacts the site.** It uses the plugin list from the website's latest WordPress Health check (last 7 days), so it needs a WordPress Health monitor on the same website. It runs right after each WordPress Health check and after each new vulnerability list, and daily otherwise.
+- **What's checked:** with the **WordPress plugin** installed, WordPress and every plugin and theme (active or not: an inactive plugin's files can still be attacked). Without it, only WordPress and the plugins whose version is visible from outside; the monitor page says so.
+- **Where you see it:** the monitor page lists each affected plugin with its vulnerabilities (linked to Wordfence), score, whether a login is needed, and the version that fixes it, or "no fix yet" (then consider removing the plugin). The weekly summary has a **Known vulnerabilities** section.
+- **Incidents** are named after what's affected, e.g. "Serious vulnerability in Contact Form 7". Updating the plugin resolves it after the next WordPress Health check.
+
+**The vulnerability list** is downloaded once a day (about 100 MB) into the `wp_vulnerabilities` table by `/api/cron/refresh-vulnerabilities`. A failed download keeps the previous list. **Settings → Vulnerabilities** shows when it was last downloaded and any error. Wordfence limits how often a key can download, so it never retries by itself; the next day's run tries again.
+
+**Setting it up (once)**
+
+1. Create a free account on [wordfence.com](https://www.wordfence.com) with a shared address (e.g. `websitewatch@figmints.com`), then **Account → Integrations → Generate API key**. It's shown only once; store it in a password manager.
+2. Add it as `WORDFENCE_API_KEY` in Vercel (**Production** only, **Sensitive**). Redeploy.
+3. Run the migration `20261010000000_vulnerabilities.sql`.
+4. Run `supabase/setup/schedule-vulnerabilities.sql` in the Supabase SQL Editor (after `schedule-checks.sql`; it reuses its stored URL and secrets). The first download happens at 06:17 UTC; to get it sooner, call the endpoint once:
+   ```bash
+   curl -X POST https://YOUR-PRODUCTION-DOMAIN/api/cron/refresh-vulnerabilities -H "Authorization: Bearer $CRON_SECRET"
+   ```
+
+Data from [Wordfence Intelligence](https://www.wordfence.com/threat-intel/), free for commercial use with attribution (shown on each monitor page).
+
 ### Maintenance windows
 
 On a client page, each website has **Start maintenance** (1 hour, 4 hours, 24 hours, 3 days or 7 days, plus an optional note). While the window is open:
@@ -624,6 +661,7 @@ Every **Monday at 9:00** (`APP_TIMEZONE`; day, time and on/off in **Settings**),
 
 - **Overview:** websites, uptime over 7 days, incidents opened this week and still open.
 - **Needs attention now:** unresolved incidents, Critical first. Warnings that have their own section below aren't repeated.
+- **Known vulnerabilities:** per site, the affected plugins with the version that fixes them; serious ones (no login needed) first and in bold.
 - **Backups:** WordPress Health backup problems.
 - **SSL certificates** expiring within 30 days.
 - **WordPress updates:** per site, core behind, plugin updates (with names; premium ones too when the site plugin is installed) and theme updates. Sites with the most updates first.
@@ -689,5 +727,6 @@ Staff sign in with **Google**. Only accounts on an allowed domain (`figmints.com
 - The scheduler endpoint refuses every request unless `CRON_SECRET` (16+ characters) is set and sent as `Authorization: Bearer …`. The comparison is constant-time. It only checks monitors already in the database.
 - The WordPress plugin's private key stays server-side; sites hold only the public key. Each request is signed for one site's HTTPS address, a 5-minute window and one use, sent only over HTTPS, and redirects aren't followed.
 - WP Engine credentials are used server-side only, for read-only calls to the fixed `api.wpengineapi.com` host.
+- The Wordfence API key is used server-side only, for one daily download from the fixed `www.wordfence.com` feed URL. Vulnerability checks never contact the client's site.
 - Alerts are only posted to a `hooks.slack.com` webhook from `SLACK_WEBHOOK_URL`. Client names, titles and errors are escaped before they go into Slack formatting.
 - `claim_due_monitors` can only be called with the secret key; execution is revoked from the public `anon` and `authenticated` roles.

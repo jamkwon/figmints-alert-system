@@ -12,7 +12,8 @@ export type MonitorType =
   | "search_visibility"
   | "domain_expiry"
   | "page_speed"
-  | "contact_form";
+  | "contact_form"
+  | "vulnerabilities";
 export type CheckStatus = "passed" | "failed" | "warning";
 export type Severity = "critical" | "warning" | "informational";
 export type IncidentStatus =

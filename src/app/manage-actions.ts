@@ -186,7 +186,7 @@ async function addWordPressMonitor(websiteId: string, websiteUrl: string) {
     .eq("monitor_type", "wordpress_health")
     .limit(1);
   fail("check WordPress monitors", existing.error);
-  if (existing.data?.length) return;
+  if (existing.data?.length) return addVulnerabilityMonitor(websiteId, websiteUrl);
   const { error } = await db.from("monitors").insert({
     website_id: websiteId,
     name: "WordPress Health",
@@ -198,6 +198,31 @@ async function addWordPressMonitor(websiteId: string, websiteUrl: string) {
     next_check_at: null,
   });
   fail("add WordPress check", error);
+  await addVulnerabilityMonitor(websiteId, websiteUrl);
+}
+
+/** Adds a known-vulnerabilities check for the website, unless it already has one. */
+async function addVulnerabilityMonitor(websiteId: string, websiteUrl: string) {
+  const db = getSupabase();
+  const existing = await db
+    .from("monitors")
+    .select("id")
+    .eq("website_id", websiteId)
+    .eq("monitor_type", "vulnerabilities")
+    .limit(1);
+  fail("check vulnerability monitors", existing.error);
+  if (existing.data?.length) return;
+  const { error } = await db.from("monitors").insert({
+    website_id: websiteId,
+    name: "Vulnerabilities",
+    monitor_type: "vulnerabilities",
+    target_url: new URL(websiteUrl).origin + "/",
+    interval_minutes: 1440,
+    severity_on_failure: "critical",
+    // The first WordPress Health check makes it due; until then there's no plugin list to check.
+    next_check_at: new Date(Date.now() + 86_400_000).toISOString(),
+  });
+  fail("add vulnerability check", error);
 }
 
 /** Adds a check that search engines can index the homepage, unless it already has one. Production only. */
@@ -429,7 +454,8 @@ function parseMonitorFields(formData: FormData, websiteUrl: string) {
     monitorType === "wordpress_health" ||
     monitorType === "search_visibility" ||
     monitorType === "domain_expiry" ||
-    monitorType === "page_speed";
+    monitorType === "page_speed" ||
+    monitorType === "vulnerabilities";
   const expectedTags = monitorType === "tracking_tags" ? parseExpectedTags(formData.getAll("expected_tags")) : [];
   const expectedText = ownRules ? null : parseExpectedText(formData.get("expected_text"));
   if (monitorType === "expected_content" && !expectedText) {

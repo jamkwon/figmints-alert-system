@@ -123,13 +123,19 @@ export function monitorsForImport(
       ? [{ name: "SSL Certificate", monitor_type: "ssl_expiry", target_url: origin, interval_minutes: IMPORT_EXTRA_INTERVAL }]
       : []),
     ...(checks.wordpress
-      ? [{ name: "WordPress Health", monitor_type: "wordpress_health", target_url: origin, interval_minutes: IMPORT_EXTRA_INTERVAL }]
+      ? [
+          { name: "WordPress Health", monitor_type: "wordpress_health", target_url: origin, interval_minutes: IMPORT_EXTRA_INTERVAL },
+          { name: "Vulnerabilities", monitor_type: "vulnerabilities", target_url: origin, interval_minutes: 1440 },
+        ]
       : []),
   ];
   return rows.map((m) => ({
     ...m,
     website_id: website.id,
     severity_on_failure: checks.severity,
-    next_check_at: new Date(now + random() * m.interval_minutes * 60_000).toISOString(),
+    // Vulnerabilities wait for the first WordPress Health check, which makes them due.
+    next_check_at: new Date(
+      m.monitor_type === "vulnerabilities" ? now + 86_400_000 : now + random() * m.interval_minutes * 60_000,
+    ).toISOString(),
   }));
 }

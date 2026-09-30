@@ -117,6 +117,16 @@ export function SettingsForm({ settings, disabledReason }: { settings: AppSettin
           </Field>
         </Group>
 
+        <Group title="Vulnerabilities">
+          <Field
+            label="Alert from this severity score"
+            hint="CVSS, 0–10. A known vulnerability that needs no login and scores this or more fails the check (Critical, so it goes to Slack). Every other one is a Warning."
+            error={err(F.vulnMinCvss)}
+          >
+            <NumberInput name={F.vulnMinCvss} value={settings.vulnMinCvss} limit={L.vulnMinCvss} />
+          </Field>
+        </Group>
+
         <Group title="Slack summaries">
           <div className="space-y-2 sm:col-span-2">
             <Checkbox name={F.summaryEnabled} label="Post a weekly summary to Slack" defaultChecked={settings.summaryEnabled} />

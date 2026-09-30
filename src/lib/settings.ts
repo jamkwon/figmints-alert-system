@@ -21,6 +21,8 @@ export interface AppSettings {
   warnOnUpdates: boolean;
   /** Page Speed: Warning below this Lighthouse performance score (0 turns it off). */
   minPerformanceScore: number;
+  /** Vulnerabilities: one that needs no login fails the check from this CVSS score (0–10) up. */
+  vulnMinCvss: number;
   summaryEnabled: boolean;
   /** Post last month's client reports to Slack on the 1st (at summaryHour). */
   monthlyReportsEnabled: boolean;
@@ -40,6 +42,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   minPhpVersion: "8.2",
   warnOnUpdates: true,
   minPerformanceScore: 50,
+  vulnMinCvss: 7,
   summaryEnabled: true,
   monthlyReportsEnabled: true,
   summaryWeekday: 1,
@@ -59,6 +62,7 @@ export const SETTING_LIMITS: Record<NumberKey, { min: number; max: number }> = {
   sslFailureDays: { min: 0, max: 60 },
   backupMaxAgeHours: { min: 12, max: 720 },
   minPerformanceScore: { min: 0, max: 100 },
+  vulnMinCvss: { min: 0, max: 10 },
   summaryWeekday: { min: 1, max: 7 },
   summaryHour: { min: 0, max: 23 },
 };
@@ -76,6 +80,7 @@ export const SETTING_FIELDS: Record<keyof AppSettings, string> = {
   minPhpVersion: "min_php_version",
   warnOnUpdates: "warn_on_updates",
   minPerformanceScore: "min_performance_score",
+  vulnMinCvss: "vuln_min_cvss",
   summaryEnabled: "summary_enabled",
   monthlyReportsEnabled: "monthly_reports_enabled",
   summaryWeekday: "summary_weekday",
@@ -127,6 +132,7 @@ const LABELS: Record<NumberKey, string> = {
   sslFailureDays: "SSL failure",
   backupMaxAgeHours: "Backup age",
   minPerformanceScore: "Minimum performance score",
+  vulnMinCvss: "Vulnerability score",
   summaryWeekday: "Summary day",
   summaryHour: "Summary time",
 };

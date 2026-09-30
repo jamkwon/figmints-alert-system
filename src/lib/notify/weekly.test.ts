@@ -134,3 +134,35 @@ test("long sections are cut with '…and N more'", () => {
   const all = text(buildWeeklySummary({ monitors, incidents: [], now, appUrl: null }));
   assert.match(all, /…and 25 more/);
 });
+
+test("lists known vulnerabilities, serious ones first", () => {
+  const vulns = (software: unknown[]) => ({ vulnerabilities: { software, findings: [], checked: 10 } });
+  const monitors: SummaryMonitor[] = [
+    {
+      ...base,
+      websiteUrl: "https://a.example/",
+      monitorType: "vulnerabilities",
+      lastStatus: "warning",
+      metadata: vulns([{ type: "plugin", slug: "elementor", name: "Elementor", version: "3.1", count: 1, worstScore: 6.4, urgent: false, updateTo: "3.2" }]),
+    },
+    {
+      ...base,
+      clientName: "Blue Finch",
+      websiteUrl: "https://b.example/",
+      monitorType: "vulnerabilities",
+      lastStatus: "failed",
+      metadata: vulns([
+        { type: "plugin", slug: "contact-form-7", name: "Contact Form 7", version: "5.8.1", count: 1, worstScore: 9.8, urgent: true, updateTo: "5.8.4" },
+        { type: "core", slug: "wordpress", name: "WordPress", version: "6.2", count: 1, worstScore: 5, urgent: false, updateTo: null },
+      ]),
+    },
+    { ...base, websiteUrl: "https://c.example/", monitorType: "vulnerabilities", metadata: vulns([]) },
+  ];
+  const s = buildWeeklySummary({ monitors, incidents: [], now, appUrl: null });
+  const t = text(s);
+  assert.equal(s.hasIssues, true);
+  assert.match(t, /Known vulnerabilities/);
+  assert.ok(t.indexOf("Blue Finch") < t.indexOf("a.example"), "serious first");
+  assert.match(t, /\*Contact Form 7 5\.8\.1\* → 5\.8\.4, WordPress 6\.2 → no fix yet/);
+  assert.doesNotMatch(t, /c\.example/);
+});

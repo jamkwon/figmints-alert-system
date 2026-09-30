@@ -136,6 +136,15 @@ test("WordPress PHP errors get their own incident title", () => {
   );
 });
 
+test("vulnerabilities get titles naming what's affected", () => {
+  const serious = fail("t", "Serious, no login needed: Contact Form 7 5.8.1 (1 vulnerability, CVSS 9.8; update to 5.8.4). Also known vulnerabilities: Elementor 3.1.0 (2 vulnerabilities, CVSS 6.4; update to 3.2)", null);
+  assert.equal(titleForCheck(serious, "Vulnerabilities", "vulnerabilities"), "Serious vulnerability in Contact Form 7 and 1 more");
+  const known = { ...fail("t", "Known vulnerabilities: WordPress 6.2 (1 vulnerability, CVSS 5.4; no fix yet)", null), status: "warning" as const };
+  assert.equal(titleForCheck(known, "Vulnerabilities", "vulnerabilities"), "Known vulnerabilities in WordPress");
+  const cantRun = { ...fail("t", "The vulnerability list hasn't been downloaded yet", null), status: "warning" as const };
+  assert.equal(titleForCheck(cantRun, "Vulnerabilities", "vulnerabilities"), "Vulnerability check can't run (Vulnerabilities)");
+});
+
 test("search visibility and domain expiry get their own incident titles", () => {
   const warning = { ...fail("t", "Domain figmints.com expires in 20 days", null), status: "warning" as const };
   assert.equal(titleForCheck(fail("t", "Page tells search engines not to index it", 200), "Search Visibility", "search_visibility"), "Search engines blocked on Search Visibility");

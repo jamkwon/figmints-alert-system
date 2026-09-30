@@ -16,6 +16,7 @@ function form(values: Record<string, string>) {
     min_php_version: "8.2",
     warn_on_updates: "on",
     min_performance_score: "50",
+    vuln_min_cvss: "7",
     summary_enabled: "on",
     monthly_reports_enabled: "on",
     summary_weekday: "1",

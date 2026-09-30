@@ -17,6 +17,7 @@ import {
   formatSeconds,
   contactFormInfo,
   wordpressInfo,
+  vulnerabilityInfo,
 } from "@/lib/format";
 import { compareVersions } from "@/lib/monitoring/wordpress";
 import { TRACKING_TAGS, isTrackingTag } from "@/lib/monitoring/tracking";
@@ -46,6 +47,19 @@ function LastResult({ view }: { view: MonitorView }) {
         {names.length > 0 ? `${[...new Set(names)].join(", ")} form${names.length === 1 ? "" : "s"}` : "No form found"}
         {form.mail && <> · email {form.mail.failures.length > 0 || form.mail.test.ok === false ? "failing" : "OK"}</>}
         {s.last_error_message && <div className="mt-0.5 text-red-700">{s.last_error_message}</div>}
+      </div>
+    );
+  }
+  const vulns = view.monitor.monitor_type === "vulnerabilities" ? vulnerabilityInfo(s.last_metadata) : null;
+  if (vulns) {
+    const urgent = vulns.software.filter((v) => v.urgent);
+    return (
+      <div className="text-xs text-slate-600">
+        {vulns.software.length === 0
+          ? s.last_error_message ?? `No known vulnerabilities (${vulns.checked} checked)`
+          : `${vulns.software.length} affected: ${vulns.software.map((v) => (v.type === "core" ? "WordPress" : v.name)).join(", ")}`}
+        {urgent.length > 0 && <div className="mt-0.5 text-red-700">{urgent.length} serious, no login needed</div>}
+        {vulns.coverage === "partial" && <div className="mt-0.5 text-slate-500">Partial: site plugin not installed</div>}
       </div>
     );
   }
