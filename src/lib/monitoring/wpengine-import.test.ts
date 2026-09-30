@@ -81,6 +81,7 @@ test("monitorsForImport builds the chosen checks with spread-out first checks", 
       ["http_status", 15, "2026-09-28T12:07:30.000Z"],
       ["ssl_expiry", 360, "2026-09-28T15:00:00.000Z"],
       ["wordpress_health", 360, "2026-09-28T15:00:00.000Z"],
+      ["vulnerabilities", 1440, "2026-09-29T12:00:00.000Z"],
     ],
   );
   assert.ok(rows.every((r) => r.website_id === "w1" && r.severity_on_failure === "critical"));

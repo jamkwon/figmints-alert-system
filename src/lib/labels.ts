@@ -18,6 +18,7 @@ export const MONITOR_TYPE_LABELS: Record<MonitorType, string> = {
   domain_expiry: "Domain Expiry",
   page_speed: "Page Speed",
   contact_form: "Contact Form",
+  vulnerabilities: "Vulnerabilities",
 };
 
 export const SEVERITY_LABELS: Record<Severity, string> = {
@@ -87,6 +88,7 @@ export const MONITOR_TYPES: readonly MonitorType[] = [
   "domain_expiry",
   "page_speed",
   "contact_form",
+  "vulnerabilities",
 ];
 
 /** Availability checks count toward uptime; SSL, link scans, tag and WordPress checks don't (they aren't downtime). */

@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { MIN_SECRET_LENGTH, isCronAuthorized, isCronSecretSet } from "@/lib/cron-auth";
 import { runDueChecks } from "@/lib/monitoring/scheduler";
 import { isSupabaseConfigured } from "@/lib/supabase/server";
 
@@ -6,24 +6,14 @@ import { isSupabaseConfigured } from "@/lib/supabase/server";
 // supabase/setup/schedule-checks.sql). Requires `Authorization: Bearer <CRON_SECRET>`.
 export const maxDuration = 60;
 
-const MIN_SECRET_LENGTH = 16;
-
-function isAuthorized(request: Request): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret || secret.length < MIN_SECRET_LENGTH) return false;
-  const expected = Buffer.from(`Bearer ${secret}`);
-  const received = Buffer.from(request.headers.get("authorization") ?? "");
-  return received.length === expected.length && timingSafeEqual(received, expected);
-}
-
 async function handle(request: Request): Promise<Response> {
-  if (!process.env.CRON_SECRET || process.env.CRON_SECRET.length < MIN_SECRET_LENGTH) {
+  if (!isCronSecretSet()) {
     return Response.json(
       { error: `CRON_SECRET is not set (min ${MIN_SECRET_LENGTH} characters)` },
       { status: 503 },
     );
   }
-  if (!isAuthorized(request)) {
+  if (!isCronAuthorized(request)) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
   if (!isSupabaseConfigured()) {

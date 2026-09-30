@@ -200,7 +200,10 @@ export function AddMonitorsForm({
         name="tags"
         label="Also watch the homepage's tracking tags, expecting the ones found now (skipped if it already has one)"
       />
-      <Checkbox name="wordpress" label="Also check WordPress health: versions, updates and WP Engine backups (skipped if it already has one)" />
+      <Checkbox
+        name="wordpress"
+        label="Also check WordPress health (versions, updates, WP Engine backups) and known vulnerabilities (skipped if it already has them)"
+      />
       <Checkbox
         name="visibility"
         label="Also check that search engines can index the homepage (production websites only; skipped if it already has one)"
@@ -240,6 +243,8 @@ const TYPE_HELP: Record<MonitorType, string> = {
     "Google PageSpeed (mobile): warns when the performance score is below the minimum in Settings, or real visitors' Core Web Vitals fail. Needs PAGESPEED_API_KEY.",
   contact_form:
     "Use the contact page's URL. Fails when the form is missing or broken (any form tool), or, with the Website Watch plugin, when the site's emails fail to send. Never submits the form.",
+  vulnerabilities:
+    "Compares the website's WordPress, plugin and theme versions (from its WordPress Health check) with Wordfence's list of known vulnerabilities. Needs a WordPress Health monitor on the same website.",
 };
 
 const SEVERITY_HELP: Partial<Record<MonitorType, string>> = {
@@ -252,6 +257,7 @@ const SEVERITY_HELP: Partial<Record<MonitorType, string>> = {
   domain_expiry: "Applies at 7 days left or when expired. 30 days left is a Warning.",
   page_speed: "Page speed only ever warns: a slow page isn't an outage.",
   contact_form: "Critical by default: a broken form or failing email loses leads.",
+  vulnerabilities: "Applies to serious vulnerabilities that need no login (score in Settings). Every other one is a Warning.",
 };
 
 const INTERVAL_HINT: Partial<Record<MonitorType, string>> = {
@@ -263,6 +269,7 @@ const INTERVAL_HINT: Partial<Record<MonitorType, string>> = {
   domain_expiry: "Daily is plenty: expiry dates change slowly.",
   page_speed: "Daily is plenty (each test takes up to 45 s and uses Google's quota).",
   contact_form: "Every 6 hours or hourly: email failures are caught as soon as the next check runs.",
+  vulnerabilities: "Daily is plenty: it also runs after every WordPress Health check and every new vulnerability list.",
 };
 
 /** Types with their own pass/fail rules, where the page settings (expected status, text, time) don't apply. */
@@ -275,6 +282,7 @@ const OWN_RULES: MonitorType[] = [
   "domain_expiry",
   "page_speed",
   "contact_form",
+  "vulnerabilities",
 ];
 
 /** Defaults for a brand-new monitor. */

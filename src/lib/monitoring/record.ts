@@ -6,6 +6,7 @@ import { withoutNul } from "@/lib/monitoring/storable";
 import { alertFor } from "@/lib/notify/alerts";
 import { notifyIncidentChange } from "@/lib/notify/send";
 import { performCheck, type HttpCheckResult } from "@/lib/monitoring/run-check";
+import { loadVulnerabilityContext, makeVulnerabilityCheckDue } from "@/lib/monitoring/vulnerability-feed";
 import type { AppSettings } from "@/lib/settings";
 import { getSettings } from "@/lib/settings-store";
 import { getSupabase } from "@/lib/supabase/server";
@@ -44,7 +45,8 @@ export async function runAndRecordCheck(monitor: Monitor): Promise<RecordedCheck
   const previousScores = monitor.monitor_type === "page_speed" ? await recentScores(monitor.id, checkedAt) : undefined;
   let checked: HttpCheckResult;
   try {
-    checked = await performCheck(monitor, settings, { previousScores });
+    const vulnerabilities = monitor.monitor_type === "vulnerabilities" ? await loadVulnerabilityContext(monitor) : undefined;
+    checked = await performCheck(monitor, settings, { previousScores, vulnerabilities });
   } catch (err) {
     // A bug or surprise in the check itself: record it (as a warning, not an outage)
     // so it's visible and the monitor moves on, instead of retrying silently forever.
@@ -85,6 +87,8 @@ export async function runAndRecordCheck(monitor: Monitor): Promise<RecordedCheck
   if (update.error) throw new Error(`Failed to update monitor: ${update.error.message}`);
 
   const { kind, hadIncident } = await applyIncidentRules(monitor, settings);
+  // A new plugin list: check it against known vulnerabilities right away.
+  if (monitor.monitor_type === "wordpress_health") await makeVulnerabilityCheckDue(monitor.website_id);
 
   // Hourly/daily/weekly monitors confirm a change quickly: a first failure is
   // re-checked within minutes (instead of a day later) before an incident opens,

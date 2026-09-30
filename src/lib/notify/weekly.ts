@@ -2,7 +2,15 @@
 // work across all sites (open incidents, backups, PHP errors, certificates,
 // WordPress updates, broken links, missing tags). Pure (relative imports only) so it can
 // be tested directly. Scheduling and sending live in weekly-send.ts.
-import { certificateInfo, domainExpiryInfo, formatDate, linkScanInfo, trackingInfo, wordpressInfo } from "../format.ts";
+import {
+  certificateInfo,
+  domainExpiryInfo,
+  formatDate,
+  linkScanInfo,
+  trackingInfo,
+  vulnerabilityInfo,
+  wordpressInfo,
+} from "../format.ts";
 import { countsTowardUptime } from "../labels.ts";
 import { TRACKING_TAGS, isTrackingTag } from "../monitoring/tracking.ts";
 import { compareVersions } from "../monitoring/wordpress.ts";
@@ -127,6 +135,7 @@ const OWN_SECTION: MonitorType[] = [
   "search_visibility",
   "domain_expiry",
   "page_speed",
+  "vulnerabilities",
 ];
 
 /** "Akismet Anti-spam: Spam Protection" → "Akismet Anti-spam". */
@@ -182,6 +191,7 @@ export function buildWeeklySummary({ monitors, incidents, now, appUrl }: Summary
   const formLines: string[] = [];
   const domainLines: { line: string; days: number }[] = [];
   const tagLines: string[] = [];
+  const vulnLines: { line: string; urgent: number; count: number }[] = [];
 
   for (const m of monitors) {
     if (m.monitorType === "wordpress_health") {
@@ -246,6 +256,21 @@ export function buildWeeklySummary({ monitors, incidents, now, appUrl }: Summary
     } else if (m.monitorType === "broken_links") {
       const scan = linkScanInfo(m.metadata);
       if (scan && scan.broken.length > 0) linkLines.push(`${site(m)}: ${plural(scan.broken.length, "broken link")}`);
+    } else if (m.monitorType === "vulnerabilities") {
+      const vulns = vulnerabilityInfo(m.metadata);
+      if (vulns && vulns.software.length > 0) {
+        const urgent = vulns.software.filter((s) => s.urgent).length;
+        const names = vulns.software.slice(0, 4).map((s) => {
+          const name = s.type === "core" ? "WordPress" : shortName(s.name);
+          return `${s.urgent ? "*" : ""}${esc(name)} ${esc(s.version)}${s.urgent ? "*" : ""} → ${s.updateTo ? esc(s.updateTo) : "no fix yet"}`;
+        });
+        const rest = vulns.software.length - names.length;
+        vulnLines.push({
+          line: `${urgent > 0 ? ":red_circle: " : ""}${site(m)}: ${names.join(", ")}${rest > 0 ? `, +${rest}` : ""}`,
+          urgent,
+          count: vulns.software.length,
+        });
+      }
     } else if (m.monitorType === "tracking_tags") {
       const tags = trackingInfo(m.metadata);
       if (tags && tags.missing.length > 0) {
@@ -262,6 +287,10 @@ export function buildWeeklySummary({ monitors, incidents, now, appUrl }: Summary
     section(
       `:globe_with_meridians: *Domains expiring within ${SUMMARY_DOMAIN_DAYS} days*`,
       domainLines.sort((a, b) => a.days - b.days).map((l) => l.line),
+    ),
+    section(
+      ":shield: *Known vulnerabilities* (update these plugins first; bold = serious, no login needed)",
+      vulnLines.sort((a, b) => b.urgent - a.urgent || b.count - a.count).map((l) => l.line),
     ),
     section(":floppy_disk: *Backups*", backupLines),
     section(

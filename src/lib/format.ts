@@ -205,6 +205,62 @@ export function wordpressInfo(metadata: Record<string, unknown> | null | undefin
   };
 }
 
+export interface VulnerabilityInfo {
+  feedRefreshedAt: string | null;
+  inventoryCheckedAt: string | null;
+  /** "complete": the site plugin listed everything; "partial": public signals only. */
+  coverage: "complete" | "partial" | null;
+  checked: number;
+  unknownVersions: number;
+  minCvss: number;
+  software: {
+    type: "core" | "plugin" | "theme";
+    slug: string;
+    name: string;
+    version: string;
+    active: boolean | null;
+    count: number;
+    worstScore: number | null;
+    urgent: boolean;
+    updateTo: string | null;
+  }[];
+  findings: {
+    id: string;
+    title: string;
+    url: string;
+    type: "core" | "plugin" | "theme";
+    slug: string;
+    name: string;
+    version: string;
+    cvss: number | null;
+    rating: string | null;
+    no_login: boolean;
+    urgent: boolean;
+    fixed_in: string | null;
+  }[];
+  totalFindings: number;
+}
+
+/** Results of a Vulnerabilities check from its latest check metadata. */
+export function vulnerabilityInfo(metadata: Record<string, unknown> | null | undefined): VulnerabilityInfo | null {
+  const v = metadata?.vulnerabilities;
+  if (!v || typeof v !== "object") return null;
+  const m = v as Record<string, unknown>;
+  const str = (x: unknown) => (typeof x === "string" ? x : null);
+  const num = (x: unknown) => (typeof x === "number" ? x : 0);
+  return {
+    feedRefreshedAt: str(m.feed_refreshed_at),
+    inventoryCheckedAt: str(m.inventory_checked_at),
+    coverage: m.coverage === "complete" || m.coverage === "partial" ? m.coverage : null,
+    checked: num(m.checked),
+    unknownVersions: num(m.unknown_versions),
+    minCvss: num(m.min_cvss),
+    software: Array.isArray(m.software) ? (m.software as VulnerabilityInfo["software"]) : [],
+    findings: Array.isArray(m.findings) ? (m.findings as VulnerabilityInfo["findings"]) : [],
+    totalFindings: num(m.total_findings),
+  };
+}
+
 export interface VisibilityInfo {
   noindex: string | null;
   robotsStatus: number | null;

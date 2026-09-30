@@ -10,6 +10,7 @@ import { getAppDataFor, getCheckHistory, getDailyUptime, getDataSource, getScore
 import { UptimeBars, UptimeLegend } from "@/components/uptime-bars";
 import { dayBars, recentDays } from "@/lib/uptime-history";
 import { ScoreTrend } from "@/components/score-trend";
+import { VulnerabilityPanel } from "@/components/vulnerability-panel";
 import {
   APP_TIMEZONE,
   certificateInfo,
@@ -22,6 +23,7 @@ import {
   pageSpeedInfo,
   formatSeconds,
   contactFormInfo,
+  vulnerabilityInfo,
   formatDate,
   formatDateTime,
   formatUptime,
@@ -83,6 +85,7 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
   const isDomain = monitor.monitor_type === "domain_expiry";
   const isSpeed = monitor.monitor_type === "page_speed";
   const isForm = monitor.monitor_type === "contact_form";
+  const isVulns = monitor.monitor_type === "vulnerabilities";
   const form = isForm ? contactFormInfo(summary?.last_metadata) : null;
   const speed = isSpeed ? pageSpeedInfo(summary?.last_metadata) : null;
   const vis = isVisibility ? visibilityInfo(summary?.last_metadata) : null;
@@ -428,6 +431,8 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
                 </dl>
               )}
             </Panel>
+          ) : isVulns ? (
+            <VulnerabilityPanel info={vulnerabilityInfo(summary?.last_metadata)} message={summary?.last_error_message ?? null} />
           ) : isDomain ? (
             <Panel title="Domain">
               {!dom ? (
@@ -706,7 +711,7 @@ export default async function MonitorDetailPage({ params }: PageProps<"/monitors
               <ConfigRow label="Website">
                 {displayUrl(website.url)} · {ENVIRONMENT_LABELS[website.environment]}
               </ConfigRow>
-              {!isSsl && !isLinkScan && !isTracking && !isWordPress && !isVisibility && !isDomain && !isSpeed && !isForm && (
+              {!isSsl && !isLinkScan && !isTracking && !isWordPress && !isVisibility && !isDomain && !isSpeed && !isForm && !isVulns && (
                 <>
                   <ConfigRow label="Expected status">
                     {monitor.expected_status_code ?? <span className="text-slate-500">200–399 (default)</span>}

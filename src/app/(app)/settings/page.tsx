@@ -11,12 +11,13 @@ import { SUMMARY_SSL_DAYS } from "@/lib/notify/weekly";
 import { SettingsForm } from "@/components/settings-form";
 import { WEEKDAY_NAMES } from "@/lib/settings";
 import { getSettingsInfo } from "@/lib/settings-store";
-import { APP_TIMEZONE } from "@/lib/format";
+import { APP_TIMEZONE, timeAgo } from "@/lib/format";
 import { allowedDomains, requireStaff } from "@/lib/auth/session";
 import { MAX_LINKS } from "@/lib/monitoring/links";
 import { checkWpeConnection } from "@/lib/monitoring/wpengine";
 import { WP_PLUGIN_VERSION, WP_PLUGIN_ZIP, pluginKey, pluginTestEmail } from "@/lib/monitoring/wp-plugin";
 import { RETENTION_DAYS } from "@/lib/monitoring/scheduler";
+import { getFeedStatus, wordfenceKey } from "@/lib/monitoring/vulnerability-feed";
 import { appUrl, slackWebhookUrl } from "@/lib/notify/send";
 import { supabaseEnvStatus } from "@/lib/supabase/server";
 
@@ -76,6 +77,8 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
   const testEmail = pluginTestEmail();
   const wpe = source === "sample" ? { ok: false, message: "Not configured" } : await checkWpeConnection();
   const alertLinkBase = appUrl();
+  const wordfenceSet = wordfenceKey() !== null;
+  const feed = source === "sample" ? null : await getFeedStatus();
 
   return (
     <>
@@ -315,6 +318,56 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
               </span>
             </Row>
           )}
+        </dl>
+      </Panel>
+
+      <Panel title="Vulnerabilities" className="mt-6">
+        <dl>
+          <Row label="Wordfence API key">
+            {wordfenceSet ? (
+              <HealthBadge health="healthy" label="Set" />
+            ) : (
+              <span className="flex items-center gap-2">
+                <HealthBadge health="unknown" label="Not set up" />
+                <span className="text-xs text-slate-500">Set WORDFENCE_API_KEY (see README → Vulnerabilities).</span>
+              </span>
+            )}
+          </Row>
+          <Row label="Vulnerability list">
+            {!feed ? (
+              <span className="text-slate-500">Unavailable (run the migration 20261010000000_vulnerabilities.sql)</span>
+            ) : feed.refreshedAt ? (
+              <>
+                {feed.recordCount.toLocaleString("en-US")} vulnerabilities, downloaded {timeAgo(feed.refreshedAt)}
+              </>
+            ) : (
+              <span className="text-slate-500">Not downloaded yet</span>
+            )}
+            <span className="mt-1 block text-xs">
+              <Link href="/vulnerabilities" className="text-fig-plum hover:underline">
+                Vulnerabilities found on your sites
+              </Link>
+              <span className="text-slate-400"> · </span>
+              <a
+                href="https://www.wordfence.com/threat-intel/vulnerabilities/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-fig-plum hover:underline"
+              >
+                Wordfence&apos;s full list ↗
+              </a>
+            </span>
+            {feed?.lastError && (
+              <span className="mt-1 block text-xs text-red-700">
+                Last attempt{feed.lastAttemptAt ? ` (${timeAgo(feed.lastAttemptAt)})` : ""} failed: {feed.lastError}
+              </span>
+            )}
+          </Row>
+          <Row label="What it adds">
+            A Vulnerabilities monitor per WordPress site compares its WordPress, plugin and theme versions with
+            Wordfence&apos;s list, downloaded once a day. It fails (Critical, so Slack hears) for a vulnerability scoring{" "}
+            {rules.vulnMinCvss} or more that needs no login; every other one is a Warning.
+          </Row>
         </dl>
       </Panel>
 

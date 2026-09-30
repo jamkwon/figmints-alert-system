@@ -38,6 +38,7 @@ import { PAGESPEED_API, PAGESPEED_STRATEGY, evaluatePageSpeed, parsePageSpeed, s
 import { detectForms, evaluateForms, hubspotDefinitionUrl, hubspotFormStatus } from "./forms.ts";
 import { firstSetEnv } from "../supabase/config.ts";
 import { WP_PLUGIN_ROUTE, pluginKey, signRequest } from "./wp-plugin.ts";
+import { vulnerabilityCheck, type VulnerabilityContext } from "./vulnerabilities.ts";
 
 const TIMEOUT_MS = 15_000;
 const MAX_REDIRECTS = 5;
@@ -1106,6 +1107,8 @@ export async function performContactFormCheck(monitor: Monitor): Promise<HttpChe
 export interface CheckContext {
   /** Page speed: scores from the previous 7 days. */
   previousScores?: number[];
+  /** Vulnerabilities: the website's plugin list and the matching known vulnerabilities. */
+  vulnerabilities?: VulnerabilityContext;
 }
 
 /** Runs the right kind of check for the monitor, with the rules from Settings. */
@@ -1124,5 +1127,9 @@ export function performCheck(
   if (m.monitor_type === "domain_expiry") return performDomainCheck(m);
   if (m.monitor_type === "page_speed") return performPageSpeedCheck(m, settings, context.previousScores);
   if (m.monitor_type === "contact_form") return performContactFormCheck(m);
+  if (m.monitor_type === "vulnerabilities") {
+    if (!context.vulnerabilities) return Promise.reject(new Error("vulnerability data wasn't loaded"));
+    return Promise.resolve(vulnerabilityCheck(context.vulnerabilities, settings.vulnMinCvss));
+  }
   return performHttpCheck(m);
 }

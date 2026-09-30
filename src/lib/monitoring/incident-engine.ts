@@ -41,6 +41,14 @@ export function titleForCheck(check: Check, monitorName: string, monitorType?: M
     if (/fatal PHP error/i.test(check.error_message ?? "")) return `PHP errors on ${monitorName}`;
     if (check.status === "warning") return `WordPress updates needed on ${monitorName}`;
   }
+  if (monitorType === "vulnerabilities") {
+    // Messages read "Serious, no login needed: Contact Form 7 5.8.1 (…); Elementor 3.1 (…)".
+    const affected = [...(check.error_message ?? "").matchAll(/(?:: |; )([^;:(]+?) \d[\w.-]* \(/g)].map((m) => m[1]);
+    const what = affected.length ? `${affected[0]}${affected.length > 1 ? ` and ${affected.length - 1} more` : ""}` : monitorName;
+    if (check.status === "failed") return `Serious vulnerability in ${what}`;
+    if (/^Known vulnerabilities/.test(check.error_message ?? "")) return `Known vulnerabilities in ${what}`;
+    return `Vulnerability check can't run (${monitorName})`;
+  }
   if (monitorType === "search_visibility") {
     return check.status === "warning"
       ? `Search visibility issue on ${monitorName}`
