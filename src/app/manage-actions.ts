@@ -11,6 +11,7 @@ import { MAX_IMPORT, buildCandidates, monitorsForImport } from "@/lib/monitoring
 import { listInstalls, listSites } from "@/lib/monitoring/wpengine";
 import { parseSettingsForm } from "@/lib/settings";
 import { saveSettings } from "@/lib/settings-store";
+import { hashSharePassword, newSharePassword, newShareToken } from "@/lib/share-links";
 import { fetchAllRows } from "@/lib/supabase/paginate";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
 import type { Monitor, Website } from "@/lib/types";
@@ -632,4 +633,72 @@ export async function saveSettingsAction(_prev: FormState, formData: FormData): 
     await saveSettings(parsed.settings, actor);
     return "/settings?saved=1";
   });
+}
+
+// Client links ------------------------------------------------------------------------
+
+export interface ShareLinkState extends FormState {
+  /** The new password: shown to staff this once, then only its hash is kept. */
+  password?: string;
+}
+
+async function shareLinkGuard(clientId: unknown): Promise<string | null> {
+  if (!isSupabaseConfigured()) return "Connect Supabase to make changes.";
+  if (!(await isStaffRequest())) return "Your session has ended. Sign in again.";
+  if (typeof clientId !== "string" || !UUID.test(clientId)) return "Unknown client.";
+  return null;
+}
+
+/** Makes the client's report link with a new password, replacing (revoking) the current one. */
+export async function createShareLinkAction(clientId: string): Promise<ShareLinkState> {
+  const problem = await shareLinkGuard(clientId);
+  if (problem) return { ok: false, message: problem };
+  const db = getSupabase();
+  const { error: revokeError } = await db
+    .from("client_share_links")
+    .update({ revoked_at: new Date().toISOString() })
+    .eq("client_id", clientId)
+    .is("revoked_at", null);
+  if (revokeError) return { ok: false, message: `Could not replace the link: ${revokeError.message}` };
+  const password = newSharePassword();
+  const { error } = await db.from("client_share_links").insert({
+    client_id: clientId,
+    token: newShareToken(),
+    password_hash: await hashSharePassword(password),
+    created_by: (await getStaffUser())?.email ?? null,
+  });
+  if (error) return { ok: false, message: `Could not create the link: ${error.message}` };
+  refresh();
+  return { ok: true, message: "Link created.", password };
+}
+
+/** A new password for the current link. Anyone who unlocked it must enter the new one. */
+export async function resetSharePasswordAction(clientId: string): Promise<ShareLinkState> {
+  const problem = await shareLinkGuard(clientId);
+  if (problem) return { ok: false, message: problem };
+  const password = newSharePassword();
+  const { data, error } = await getSupabase()
+    .from("client_share_links")
+    .update({ password_hash: await hashSharePassword(password), failed_attempts: 0, locked_until: null })
+    .eq("client_id", clientId)
+    .is("revoked_at", null)
+    .select("id");
+  if (error) return { ok: false, message: `Could not change the password: ${error.message}` };
+  if (!data?.length) return { ok: false, message: "This client has no link." };
+  refresh();
+  return { ok: true, message: "New password set.", password };
+}
+
+/** Stops the client's link from working. */
+export async function revokeShareLinkAction(clientId: string): Promise<ShareLinkState> {
+  const problem = await shareLinkGuard(clientId);
+  if (problem) return { ok: false, message: problem };
+  const { error } = await getSupabase()
+    .from("client_share_links")
+    .update({ revoked_at: new Date().toISOString() })
+    .eq("client_id", clientId)
+    .is("revoked_at", null);
+  if (error) return { ok: false, message: `Could not turn off the link: ${error.message}` };
+  refresh();
+  return { ok: true, message: "Link turned off." };
 }

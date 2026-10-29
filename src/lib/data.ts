@@ -1,6 +1,7 @@
 import "server-only";
 import { cache } from "react";
-import { connection } from "next/server";
+import { cookies } from "next/headers";
+import { after, connection } from "next/server";
 import {
   compareHealth,
   isActiveIncident,
@@ -10,16 +11,18 @@ import {
   rollUpHealth,
   type Health,
 } from "@/lib/health";
-import { requireStaff } from "@/lib/auth/session";
+import { getAuthMode, requireStaff } from "@/lib/auth/session";
 import { countsTowardUptime } from "@/lib/labels";
 import { APP_TIMEZONE } from "@/lib/format";
 import type { ReportInput, ReportMonth } from "@/lib/report";
 import { countByDay, type DayCount } from "@/lib/uptime-history";
 import { buildSampleData } from "@/lib/sample-data";
+import { SHARE_COOKIE, isShareToken, isUnlocked } from "@/lib/share-links";
 import { fetchAllRows } from "@/lib/supabase/paginate";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/server";
 import type {
   CheckResult,
+  ClientShareLink,
   IncidentEvent,
   MonitorUptime,
   Client,
@@ -501,9 +504,10 @@ export async function loadReportInput(clientId: string, month: ReportMonth): Pro
   const inMonth = (iso: string) => iso >= start && iso < end;
   const toMonitor = (m: Monitor) => ({ id: m.id, websiteId: m.website_id, name: m.name, type: m.monitor_type });
   const toWebsite = (w: Website) => ({ id: w.id, name: w.name, url: w.url, environment: w.environment });
-  const toIncident = (i: Incident) => ({
+  const toIncident = (i: Incident, monitors: Monitor[]) => ({
     title: i.title,
     severity: i.severity,
+    monitorType: monitors.find((m) => m.id === i.monitor_id)?.monitor_type ?? null,
     firstDetectedAt: i.first_detected_at,
     resolvedAt: i.resolved_at,
   });
@@ -532,7 +536,7 @@ export async function loadReportInput(clientId: string, month: ReportMonth): Pro
           .filter((c) => !availability.some((m) => m.id === c.monitor_id))
           .sort((a, b) => a.checked_at.localeCompare(b.checked_at))
           .map((c) => ({ monitorId: c.monitor_id, checkedAt: c.checked_at, status: c.status, passed: c.passed, errorMessage: c.error_message, metadata: c.metadata })),
-        incidents: snapshot.incidents.filter((i) => i.client_id === clientId && openInMonth(i)).map(toIncident),
+        incidents: snapshot.incidents.filter((i) => i.client_id === clientId && openInMonth(i)).map((i) => toIncident(i, monitors)),
         daily: availability.flatMap((m) =>
           countByDay(checks.filter((c) => c.monitor_id === m.id), APP_TIMEZONE).map((d) => ({ monitorId: m.id, ...d })),
         ),
@@ -602,11 +606,61 @@ export async function loadReportInput(clientId: string, month: ReportMonth): Pro
         errorMessage: c.error_message,
         metadata: c.metadata,
       })),
-      incidents: (incidents.data as Incident[]).map(toIncident),
+      incidents: (incidents.data as Incident[]).map((i) => toIncident(i, all)),
       daily: [...daily].flatMap(([monitorId, days]) => days.map((d) => ({ monitorId, ...d }))),
     },
   };
 }
+
+// Client links ----------------------------------------------------------------------
+
+export type StaffShareLink = Pick<ClientShareLink, "token" | "created_by" | "created_at" | "last_viewed_at" | "locked_until">;
+
+/** The client's working report link (never its password hash); null if none, or before its migration ran. */
+export async function getShareLink(clientId: string): Promise<StaffShareLink | null> {
+  await requireStaff();
+  await connection();
+  if (!isSupabaseConfigured()) return null;
+  const { data, error } = await getSupabase()
+    .from("client_share_links")
+    .select("token, created_by, created_at, last_viewed_at, locked_until")
+    .eq("client_id", clientId)
+    .is("revoked_at", null)
+    .maybeSingle();
+  return error ? null : (data as StaffShareLink | null);
+}
+
+/** A working report link, for the public share page and its password form. */
+export async function findShareLink(token: string): Promise<ClientShareLink | null> {
+  // Off unless login is required: sample data has no links, and a
+  // half-configured deployment stays locked.
+  if (getAuthMode() !== "required" || !isShareToken(token)) return null;
+  const { data, error } = await getSupabase()
+    .from("client_share_links")
+    .select("*")
+    .eq("token", token)
+    .is("revoked_at", null)
+    .maybeSingle();
+  if (error) throw new Error(`Failed to load link: ${error.message}`);
+  return data as ClientShareLink | null;
+}
+
+/**
+ * Who may see a report link: null if it's unknown or revoked, "locked" until its
+ * password has been entered on this device, otherwise the client it opens. No
+ * staff check: the token and password are the access, and they only ever open
+ * that one client's report. Notes when an unlocked link was last opened.
+ */
+export const getSharedAccess = cache(async (token: string): Promise<{ clientId: string } | "locked" | null> => {
+  await connection();
+  const link = await findShareLink(token);
+  if (!link) return null;
+  if (!isUnlocked((await cookies()).get(SHARE_COOKIE)?.value, token, link.password_hash)) return "locked";
+  after(async () => {
+    await getSupabase().from("client_share_links").update({ last_viewed_at: new Date().toISOString() }).eq("id", link.id);
+  });
+  return { clientId: link.client_id };
+});
 
 // Trends --------------------------------------------------------------------------
 

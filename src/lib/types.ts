@@ -143,6 +143,21 @@ export interface IncidentEvent {
   message: string;
 }
 
+/** A client's report link (/share/<token>, no login). */
+export interface ClientShareLink {
+  id: string;
+  client_id: string;
+  token: string;
+  /** scrypt; the password itself is only shown to staff once. */
+  password_hash: string;
+  failed_attempts: number;
+  locked_until: string | null;
+  created_by: string | null;
+  created_at: string;
+  revoked_at: string | null;
+  last_viewed_at: string | null;
+}
+
 /** Row of the monitor_uptime view. */
 export interface MonitorUptime {
   monitor_id: string;

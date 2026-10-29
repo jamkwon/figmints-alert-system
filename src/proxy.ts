@@ -6,8 +6,9 @@ import { PUBLIC_KEY_VARS, SECRET_KEY_VARS, URL_VARS, firstSetEnv } from "@/lib/s
 // Runs before every page and server action: refreshes the Supabase login session
 // and sends anyone who isn't signed-in staff to /login. Pages, data loading and
 // actions check again (src/lib/auth/session.ts); this is the first line, not the only one.
+// /share/ is a client's report link: the page checks its token (src/lib/data.ts).
 
-const PUBLIC_PATHS = ["/login", "/auth/"];
+const PUBLIC_PATHS = ["/login", "/auth/", "/share/"];
 
 export async function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
