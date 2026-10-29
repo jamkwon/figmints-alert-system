@@ -100,6 +100,8 @@ export interface ReportCheck {
 export interface ReportIncident {
   title: string;
   severity: Severity;
+  /** The monitor that opened it, if known. */
+  monitorType?: MonitorType | null;
   firstDetectedAt: string;
   resolvedAt: string | null;
 }
@@ -150,7 +152,14 @@ export interface MonthlyReport {
     meanMinutesToResolve: number | null;
   };
   websites: { name: string; url: string; environment: Environment; uptime: number | null; checks: number; days: DayBar[] }[];
-  incidents: { title: string; severity: Severity; openedAt: string; resolvedAt: string | null; minutes: number | null }[];
+  incidents: {
+    title: string;
+    severity: Severity;
+    monitorType: MonitorType | null;
+    openedAt: string;
+    resolvedAt: string | null;
+    minutes: number | null;
+  }[];
   pageSpeed: { website: string; url: string; latest: number | null; min: number; max: number; average: number; tests: number; latestLcpMs: number | null }[];
   wordpress: WordPressWork[];
   ssl: { website: string; validTo: string }[];
@@ -297,6 +306,7 @@ export function buildMonthlyReport(input: ReportInput): MonthlyReport {
     .map((i) => ({
       title: i.title,
       severity: i.severity,
+      monitorType: i.monitorType ?? null,
       openedAt: i.firstDetectedAt,
       resolvedAt: i.resolvedAt,
       minutes: i.resolvedAt ? Math.max(0, Math.round((Date.parse(i.resolvedAt) - Date.parse(i.firstDetectedAt)) / 60_000)) : null,
@@ -382,5 +392,18 @@ export function buildMonthlyReport(input: ReportInput): MonthlyReport {
     domains,
     visibility,
     forms,
+  };
+}
+
+/**
+ * The report for a client link. A link can be forwarded, so it doesn't name
+ * which plugin or theme has a known vulnerability (one that may still be open).
+ */
+export function forSharing(report: MonthlyReport): MonthlyReport {
+  return {
+    ...report,
+    incidents: report.incidents.map((i) =>
+      i.monitorType === "vulnerabilities" ? { ...i, title: "Security vulnerability found in a plugin or theme" } : i,
+    ),
   };
 }

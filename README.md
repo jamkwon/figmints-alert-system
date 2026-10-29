@@ -26,6 +26,7 @@ This app is for the Figmints team only. It has no client accounts, public pages,
 - **Contact form checks: done.** A *Contact Form* monitor fails when a page's form is missing or broken (any form tool), or when the site's emails fail to send (WordPress plugin 1.3+). See **Contact forms**.
 - **Trends and automatic reports: done.** 90-day **uptime history** bars (monitor and client pages, and daily bars in the monthly report), a **page speed trend** chart with a warning on sharp drops, and last month's client reports **posted to Slack on the 1st**. See **Uptime history**, **Page speed** and **Monthly report**.
 - **Known vulnerabilities: done.** A *Vulnerabilities* monitor compares each WordPress site's core, plugin and theme versions with the Wordfence Intelligence list (downloaded daily), and alerts on serious ones that need no login. See **Vulnerabilities**.
+- **Client links: done.** A private link and password that let a client open their own live report without an account. See **Client links**.
 
 Running checks and updating incidents require Supabase. On sample data those controls are disabled.
 
@@ -115,6 +116,7 @@ The schema lives in `supabase/migrations/`. Sample data lives in `supabase/seed.
    - `20261008000000_monthly_report_posts.sql` (monthly reports in Slack)
    - `20261009000000_uptime_speed.sql` (faster uptime numbers)
    - `20261010000000_vulnerabilities.sql` (Vulnerabilities monitors, added to every site with WordPress Health)
+   - `20261011000000_client_share_links.sql` (client links: a client's report behind a link and password)
 3. (Optional) Run `supabase/seed.sql` to load the 6 sample clients. You can re-run it safely; it replaces the earlier sample rows.
 4. Copy the project URL and the secret key into `.env.local`, then restart `npm run dev`.
 
@@ -144,6 +146,7 @@ For a local Supabase stack (requires Docker), run `npx supabase init` once, then
 | `monitor_uptime` (view) | Passing checks / all checks per monitor over 24 hours, 7 days and 30 days |
 | `wp_vulnerabilities` | Known vulnerabilities from Wordfence: one row per affected version range, replaced daily |
 | `vulnerability_feed` | When the vulnerability list was last downloaded, and the last error |
+| `client_share_links` | Client links: token, password hash, wrong-password lock, who made it, last opened, revoked |
 
 Row-level security is enabled on every table with **no policies**. The public anon/publishable key can read nothing; only the server's secret key has access.
 
@@ -166,6 +169,7 @@ src/
   app/
     (app)/              Signed-in pages: dashboard, clients, monitors, incidents, checks, settings
     login/, auth/       Sign-in page, Google sign-in and sign-out actions, OAuth callback
+    share/[token]/      Client link: one client's report after its password, no staff login
     actions.ts          Server actions: Run check, Run due checks, incident status/snooze, team and notes
     manage-actions.ts   Server actions: create/edit clients, websites, monitors; maintenance windows
     api/cron/run-checks Scheduler endpoint (called by Supabase pg_cron)
@@ -191,6 +195,7 @@ src/
       pagespeed.ts      Google PageSpeed Insights: score, lab and real-user metrics, rules
       forms.ts          Contact forms on a page (any builder) and the site's email health
     report.ts           Monthly client report: months, uptime, incidents, WordPress work done
+    share-links.ts      Client links: tokens, passwords (scrypt), the unlock cookie, wrong-password lock
     uptime-history.ts   Per-day uptime bars (90 days, or a report's month)
       url-safety.ts     SSRF protection
       incident-engine.ts Pure rules: when to open, update or resolve an incident
@@ -618,7 +623,19 @@ Each client has a **Monthly report** (client page → **Monthly report**): one p
 
 **Posted to Slack on the 1st:** at the weekly summary's hour (Settings → Monitoring rules), one message lists every active client with its uptime, incidents and WordPress updates for the month that just ended, and links to each report (clients needing a look first, marked :large_orange_circle:: uptime under 99.9%, backups, PHP errors, search or form problems). If the scheduler was down, it's posted within 24 hours. It's claimed in `monthly_report_posts` so it's posted once, and can be turned off in Settings. **Settings → Alerts → Post last month's reports now** posts it on demand. With many clients, up to 40 are listed, then "…and N more".
 
-Sections without monitors are left out. **Months:** the current one ("so far") and the two before it; check history is kept 90 days. The page opens on last month, the one to send at the start of a month. It's for staff only (it needs sign-in); clients get the PDF.
+Sections without monitors are left out. **Months:** the current one ("so far") and the two before it; check history is kept 90 days. The page opens on last month, the one to send at the start of a month. It needs a staff sign-in; clients get the PDF, or a client link.
+
+### Client links
+
+A **client link** lets a client open their own report any time, with no account: client page → **Client link** → **Create link**. It's the same report, opening on this month so far, with the month picker and **Print / Save as PDF**, and nothing else from the app.
+
+- **Password:** every link has one, generated when the link is made (e.g. `K7QM-4PXA-9TRD`; case, spaces and dashes don't matter). It's **shown once**: send it separately from the link (the link by email, the password by text), so one forwarded message isn't enough. Only a scrypt hash is kept, so a lost password can't be looked up: **New password** makes another, and anyone who already unlocked the link has to enter the new one.
+- **On the client's side:** the password is asked once per browser, then remembered for 30 days (an http-only cookie for that link only, derived from the password hash, so it can't be made up and stops working when the password changes). 10 wrong passwords in a row lock the link for 15 minutes; the client page shows when it's locked.
+- **The link itself** is `/share/<token>`, with 256 random bits, so links can't be guessed or listed. Pages say `noindex` and send no referrer. A wrong, replaced or turned-off link shows *This link isn't active*, the same either way.
+- **Managing it:** **Copy link**, **Replace link** (new link and password, the old link stops working), **Turn off**. One link per client works at a time. The client page shows who made it, when, and when it was last opened.
+- **What it doesn't show:** which plugin or theme has a known vulnerability (a link can be forwarded, and the hole may still be open); those incidents read *Security vulnerability found in a plugin or theme*.
+
+Links are stored in `client_share_links` (migration `20261011000000_client_share_links.sql`). They only work when sign-in is required (Supabase connected); on sample data they're off.
 
 ## Settings
 

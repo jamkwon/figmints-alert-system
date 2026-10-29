@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildMonthlyReport, monthRange, recentMonths, type ReportCheck, type ReportInput } from "./report.ts";
+import { buildMonthlyReport, forSharing, monthRange, recentMonths, type ReportCheck, type ReportInput } from "./report.ts";
 
 const TZ = "America/New_York";
 
@@ -144,6 +144,23 @@ test("page speed, SSL, domain and search visibility", () => {
   assert.deepEqual(r.visibility, [
     { website: "Main site", checks: 2, problems: 1, latestProblem: "Page tells search engines not to index it" },
   ]);
+});
+
+test("forSharing: client links don't name the vulnerable plugin", () => {
+  const r = forSharing(
+    buildMonthlyReport({
+      ...input,
+      incidents: [
+        { title: "Serious vulnerability in Contact Form 7", severity: "critical", monitorType: "vulnerabilities", firstDetectedAt: "2026-09-03T10:00:00Z", resolvedAt: null },
+        { title: "Homepage returning HTTP 503", severity: "critical", monitorType: "http_status", firstDetectedAt: "2026-09-12T14:00:00Z", resolvedAt: "2026-09-12T14:45:00Z" },
+      ],
+    }),
+  );
+  assert.deepEqual(
+    r.incidents.map((i) => i.title),
+    ["Security vulnerability found in a plugin or theme", "Homepage returning HTTP 503"],
+  );
+  assert.equal(r.incidents[0].severity, "critical");
 });
 
 test("an empty month and a month in progress", () => {

@@ -5,13 +5,16 @@ import type { ReactNode } from "react";
 import { IncidentTable } from "@/components/incident-table";
 import { MaintenanceControl } from "@/components/maintenance-control";
 import { MonitorTable } from "@/components/monitor-table";
+import { ShareLinkControl } from "@/components/share-link-control";
 import { HealthBadge, HealthDot } from "@/components/status";
 import { EmptyState, LinkButton, Panel, PageHeader, When } from "@/components/ui";
 import { UptimeBars, UptimeLegend } from "@/components/uptime-bars";
-import { getClientAppData, getDailyUptime } from "@/lib/data";
+import { getClientAppData, getDailyUptime, getShareLink } from "@/lib/data";
 import { dayBars, recentDays } from "@/lib/uptime-history";
-import { APP_TIMEZONE, displayUrl, formatDateTime, formatUptime, isInFuture } from "@/lib/format";
+import { APP_TIMEZONE, displayUrl, formatDateTime, formatUptime, isInFuture, timeAgo } from "@/lib/format";
 import { ENVIRONMENT_LABELS, countsTowardUptime } from "@/lib/labels";
+import { appUrl } from "@/lib/notify/send";
+import { sharePath } from "@/lib/share-links";
 
 async function findClient(id: string) {
   const data = await getClientAppData(id);
@@ -44,7 +47,7 @@ export default async function ClientDetailPage({ params }: PageProps<"/clients/[
   const { client, health, websites, monitors, incidents, activeIncidents, lastCheckedAt, uptime7d } = view;
   // Uptime history: each website's page-load monitors, added up per day.
   const pageLoad = monitors.filter((m) => countsTowardUptime(m.monitor.monitor_type) && m.monitor.active);
-  const daily = await getDailyUptime(pageLoad.map((m) => m.monitor.id));
+  const [daily, shareLink] = await Promise.all([getDailyUptime(pageLoad.map((m) => m.monitor.id)), getShareLink(client.id)]);
   const days = recentDays(new Date(), 90, APP_TIMEZONE);
   const websitesWithUptime = websites.flatMap(({ website }) => {
     const ids = pageLoad.filter((m) => m.website.id === website.id).map((m) => m.monitor.id);
@@ -206,6 +209,29 @@ export default async function ClientDetailPage({ params }: PageProps<"/clients/[
           showClient={false}
           emptyMessage="No incidents recorded for this client."
         />
+      </Panel>
+
+      <Panel title="Client link" aside="Their live report, behind a password" className="mb-6">
+        <ShareLinkControl
+          clientId={client.id}
+          path={shareLink ? sharePath(shareLink.token) : null}
+          baseUrl={appUrl()}
+          disabledReason={disabledReason}
+        >
+          {shareLink && (
+            <p className="text-xs text-slate-500">
+              Created {formatDateTime(shareLink.created_at)}
+              {shareLink.created_by && <> by {shareLink.created_by}</>} ·{" "}
+              {shareLink.last_viewed_at ? <>Last opened {timeAgo(shareLink.last_viewed_at)}</> : "Not opened yet"}
+              {isInFuture(shareLink.locked_until) && (
+                <span className="text-amber-800">
+                  {" "}
+                  · Locked until {formatDateTime(shareLink.locked_until!)} after too many wrong passwords
+                </span>
+              )}
+            </p>
+          )}
+        </ShareLinkControl>
       </Panel>
 
       <Panel title="Internal notes" aside={<Link href={`/clients/${client.id}/edit`} className="text-fig-plum hover:underline">Edit</Link>}>
